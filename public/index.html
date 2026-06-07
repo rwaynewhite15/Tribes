@@ -2,7 +2,11 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f1419" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>Tribes — Domination</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
@@ -62,11 +66,22 @@
       <div id="board-wrap">
         <canvas id="board"></canvas>
         <div id="tooltip" class="hidden"></div>
+        <div id="zoom-controls">
+          <button id="btn-zoom-in" aria-label="Zoom in">＋</button>
+          <button id="btn-zoom-out" aria-label="Zoom out">－</button>
+        </div>
       </div>
 
       <aside id="sidebar">
+        <div id="sheet-bar">
+          <button id="sheet-toggle" aria-label="Toggle panel">▴</button>
+          <div class="sheet-tabs">
+            <button data-tab="sel" class="active">Selection</button>
+            <button data-tab="log">Chronicle</button>
+          </div>
+        </div>
         <div id="selection-panel">
-          <p class="hint">Click a tile or unit to begin. Select your <b>Settler</b> and press <b>Found City</b>.</p>
+          <p class="hint">Tap a tile or unit to begin. Select your <b>Settler</b> and press <b>Found City</b>.</p>
         </div>
         <div id="log-panel">
           <h3>Chronicle</h3>

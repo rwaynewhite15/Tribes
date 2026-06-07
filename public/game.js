@@ -17,11 +17,14 @@ const G = {
   gameId: null,
   selUnit: null,   // selected unit id
   selCity: null,   // selected city id
-  buildMode: false, // settler/builder action selecting tile (not used; actions are in place)
+  selTile: null,   // inspected bare-terrain tile {x,y}
   hoverTile: null,
-  // camera
+  // camera + viewport (CSS pixels; dpr scales the backing buffer)
   cam: { x: 0, y: 0, scale: 1 },
+  view: { cssW: 0, cssH: 0, dpr: 1 },
   drag: null,
+  pointers: new Map(), // active touch/mouse pointers for pan + pinch
+  pinch: null,
 };
 
 const TILE = 64; // base tile size in world pixels
@@ -107,6 +110,8 @@ function enterGame(state) {
   updateHud();
   renderLog();
   renderSelection();
+  setSheetTab('sel');
+  if (isMobileLayout()) toggleSheet(true); // show the intro hint on phones
   maybeGameOver();
 }
 
@@ -117,17 +122,26 @@ function centerOnHumanStart() {
   const c = G.state.cities.find((x) => x.owner === human.id);
   const focus = c || u;
   if (focus) { fx = focus.x; fy = focus.y; }
-  G.cam.scale = 1;
-  G.cam.x = fx * TILE + TILE / 2 - canvas.width / (2 * G.cam.scale);
-  G.cam.y = fy * TILE + TILE / 2 - canvas.height / (2 * G.cam.scale);
+  // Fit a few tiles on screen at a sensible default zoom for phones.
+  G.cam.scale = G.view.cssW < 560 ? Math.max(0.6, Math.min(1, G.view.cssW / (6 * TILE))) : 1;
+  G.cam.x = fx * TILE + TILE / 2 - G.view.cssW / (2 * G.cam.scale);
+  G.cam.y = fy * TILE + TILE / 2 - G.view.cssH / (2 * G.cam.scale);
   clampCamera();
 }
 
 window.addEventListener('resize', () => { if (!$('game').classList.contains('hidden')) { resizeCanvas(); render(); } });
+// Size the backing buffer for the device pixel ratio so the map stays crisp on
+// retina / high-density phone screens, while we draw in CSS-pixel coordinates.
 function resizeCanvas() {
   const wrap = $('board-wrap');
-  canvas.width = wrap.clientWidth;
-  canvas.height = wrap.clientHeight;
+  const dpr = Math.min(window.devicePixelRatio || 1, 3);
+  G.view.cssW = wrap.clientWidth;
+  G.view.cssH = wrap.clientHeight;
+  G.view.dpr = dpr;
+  canvas.width = Math.round(G.view.cssW * dpr);
+  canvas.height = Math.round(G.view.cssH * dpr);
+  canvas.style.width = G.view.cssW + 'px';
+  canvas.style.height = G.view.cssH + 'px';
 }
 
 // ---------------------------------------------------------------------------
@@ -136,40 +150,33 @@ function resizeCanvas() {
 function bindGameControls() {
   $('btn-end').addEventListener('click', endTurn);
 
-  const cv = () => $('board');
-  cv().addEventListener('mousedown', (e) => {
-    G.drag = { x: e.clientX, y: e.clientY, camX: G.cam.x, camY: G.cam.y, moved: false };
-  });
-  window.addEventListener('mousemove', (e) => {
-    const rect = canvas.getBoundingClientRect();
-    if (G.drag) {
-      const dx = e.clientX - G.drag.x, dy = e.clientY - G.drag.y;
-      if (Math.abs(dx) + Math.abs(dy) > 4) G.drag.moved = true;
-      G.cam.x = G.drag.camX - dx / G.cam.scale;
-      G.cam.y = G.drag.camY - dy / G.cam.scale;
-      clampCamera(); render();
-    } else {
-      onHover(e.clientX - rect.left, e.clientY - rect.top, e.clientX, e.clientY);
-    }
-  });
-  window.addEventListener('mouseup', (e) => {
-    if (G.drag && !G.drag.moved) {
-      const rect = canvas.getBoundingClientRect();
-      onClickBoard(e.clientX - rect.left, e.clientY - rect.top);
-    }
-    G.drag = null;
-  });
+  // Unified pointer handling works for touch, pen and mouse:
+  //   1 pointer  -> tap to select/act, drag to pan
+  //   2 pointers -> pinch to zoom
+  canvas.addEventListener('pointerdown', onPointerDown);
+  canvas.addEventListener('pointermove', onPointerMove, { passive: false });
+  canvas.addEventListener('pointerup', onPointerUp);
+  canvas.addEventListener('pointercancel', onPointerUp);
+  canvas.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') hideTooltip(); });
+
+  // Desktop wheel zoom.
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
     const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
     const rect = canvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left, my = e.clientY - rect.top;
-    const wx = G.cam.x + mx / G.cam.scale, wy = G.cam.y + my / G.cam.scale;
-    G.cam.scale = Math.max(0.45, Math.min(2.2, G.cam.scale * factor));
-    G.cam.x = wx - mx / G.cam.scale;
-    G.cam.y = wy - my / G.cam.scale;
+    zoomAt(e.clientX - rect.left, e.clientY - rect.top, factor);
     clampCamera(); render();
   }, { passive: false });
+
+  // Zoom buttons (handy on phones without a mouse wheel).
+  $('btn-zoom-in').addEventListener('click', () => { zoomAt(G.view.cssW / 2, G.view.cssH / 2, 1.25); clampCamera(); render(); });
+  $('btn-zoom-out').addEventListener('click', () => { zoomAt(G.view.cssW / 2, G.view.cssH / 2, 1 / 1.25); clampCamera(); render(); });
+
+  // Mobile bottom-sheet: drag handle toggles open/closed, tabs switch panels.
+  $('sheet-toggle').addEventListener('click', () => toggleSheet());
+  document.querySelectorAll('.sheet-tabs button').forEach((b) => {
+    b.addEventListener('click', () => setSheetTab(b.dataset.tab));
+  });
 
   // Keyboard: space ends turn, Esc clears selection.
   window.addEventListener('keydown', (e) => {
@@ -179,9 +186,87 @@ function bindGameControls() {
   });
 }
 
+function localXY(e) {
+  const rect = canvas.getBoundingClientRect();
+  return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+}
+
+function onPointerDown(e) {
+  canvas.setPointerCapture?.(e.pointerId);
+  const p = localXY(e);
+  G.pointers.set(e.pointerId, p);
+  if (G.pointers.size === 1) {
+    G.drag = { x: p.x, y: p.y, camX: G.cam.x, camY: G.cam.y, moved: false, t: Date.now() };
+  } else if (G.pointers.size === 2) {
+    G.drag = null; // switch from pan to pinch
+    const pts = [...G.pointers.values()];
+    G.pinch = { dist: dist(pts[0], pts[1]), scale: G.cam.scale };
+  }
+}
+
+function onPointerMove(e) {
+  if (!G.pointers.has(e.pointerId)) {
+    if (e.pointerType === 'mouse') { const p = localXY(e); onHover(p.x, p.y, e.clientX, e.clientY); }
+    return;
+  }
+  e.preventDefault();
+  const p = localXY(e);
+  G.pointers.set(e.pointerId, p);
+
+  if (G.pinch && G.pointers.size >= 2) {
+    const pts = [...G.pointers.values()];
+    const d = dist(pts[0], pts[1]);
+    const mid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+    const target = Math.max(0.45, Math.min(2.4, G.pinch.scale * (d / G.pinch.dist)));
+    setScaleAt(mid.x, mid.y, target);
+    clampCamera(); render();
+    return;
+  }
+
+  if (G.drag) {
+    const dx = p.x - G.drag.x, dy = p.y - G.drag.y;
+    if (Math.abs(dx) + Math.abs(dy) > 6) G.drag.moved = true;
+    G.cam.x = G.drag.camX - dx / G.cam.scale;
+    G.cam.y = G.drag.camY - dy / G.cam.scale;
+    clampCamera(); render();
+  }
+}
+
+function onPointerUp(e) {
+  const wasTap = G.drag && !G.drag.moved && (Date.now() - G.drag.t) < 500;
+  const p = G.pointers.get(e.pointerId);
+  G.pointers.delete(e.pointerId);
+  canvas.releasePointerCapture?.(e.pointerId);
+
+  if (G.pointers.size < 2) G.pinch = null;
+  if (G.pointers.size === 1) {
+    // Dropped one finger of a pinch — resume panning from the remaining finger.
+    const rem = [...G.pointers.values()][0];
+    G.drag = { x: rem.x, y: rem.y, camX: G.cam.x, camY: G.cam.y, moved: true, t: Date.now() };
+    return;
+  }
+  if (G.pointers.size === 0) {
+    if (wasTap && p) onClickBoard(p.x, p.y);
+    G.drag = null;
+  }
+}
+
+function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+
+// Zoom keeping the world point under (sx,sy) fixed on screen.
+function zoomAt(sx, sy, factor) {
+  setScaleAt(sx, sy, Math.max(0.45, Math.min(2.4, G.cam.scale * factor)));
+}
+function setScaleAt(sx, sy, newScale) {
+  const wx = G.cam.x + sx / G.cam.scale, wy = G.cam.y + sy / G.cam.scale;
+  G.cam.scale = newScale;
+  G.cam.x = wx - sx / G.cam.scale;
+  G.cam.y = wy - sy / G.cam.scale;
+}
+
 function clampCamera() {
   const worldW = G.state.width * TILE, worldH = G.state.height * TILE;
-  const viewW = canvas.width / G.cam.scale, viewH = canvas.height / G.cam.scale;
+  const viewW = G.view.cssW / G.cam.scale, viewH = G.view.cssH / G.cam.scale;
   if (worldW <= viewW) G.cam.x = (worldW - viewW) / 2;
   else G.cam.x = Math.max(-40, Math.min(worldW - viewW + 40, G.cam.x));
   if (worldH <= viewH) G.cam.y = (worldH - viewH) / 2;
@@ -227,13 +312,17 @@ async function onClickBoard(sx, sy) {
   }
 
   // Otherwise: select what's under the cursor (prefer own unit, then city).
+  G.selTile = null;
   if (unitHere && unitHere.owner === human.id) { G.selUnit = unitHere.id; G.selCity = null; }
   else if (cityHere && cityHere.owner === human.id) { G.selCity = cityHere.id; G.selUnit = null; }
   else if (unitHere) { G.selUnit = unitHere.id; G.selCity = null; } // inspect enemy unit
   else if (cityHere) { G.selCity = cityHere.id; G.selUnit = null; }
-  else { G.selUnit = null; G.selCity = null; }
+  else { G.selUnit = null; G.selCity = null; G.selTile = t; } // inspect bare terrain
+  openSheetIfMobile();
   renderSelection(); render();
 }
+
+function hideTooltip() { $('tooltip').classList.add('hidden'); }
 
 function onHover(sx, sy, clientX, clientY) {
   const t = screenToTile(sx, sy);
@@ -298,6 +387,7 @@ function render() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.fillStyle = '#0b0f14';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.scale(G.view.dpr, G.view.dpr); // map device pixels -> CSS pixels
   ctx.scale(G.cam.scale, G.cam.scale);
   ctx.translate(-G.cam.x, -G.cam.y);
 
@@ -485,6 +575,23 @@ function renderSelection() {
     return;
   }
 
+  if (G.selTile) {
+    const tile = s.tiles[G.selTile.y * s.width + G.selTile.x];
+    if (tile) {
+      const def = G.defs.TERRAIN[tile.terrain];
+      let html = `<div class="sel-title"><span class="ico">▦</span> ${def.name}</div>`;
+      html += `<div class="sel-sub">Tile (${G.selTile.x},${G.selTile.y})</div>`;
+      html += `<div class="statline"><span class="stat">Gold <b>${terrainTileGold(tile)}</b></span>`;
+      if (def.canImprove) html += `<span class="stat">Improve: <b>${G.defs.IMPROVEMENTS[def.canImprove].name}</b></span>`;
+      if (!def.passable) html += `<span class="stat">Impassable</span>`;
+      html += `</div>`;
+      if (tile.improvement) html += `<div class="sel-sub">${G.defs.IMPROVEMENTS[tile.improvement].icon} ${G.defs.IMPROVEMENTS[tile.improvement].name} built here.</div>`;
+      if (tile.resource) html += `<div class="sel-sub">✦ ${G.defs.RESOURCES[tile.resource].name} — a Builder can harvest it for ${G.defs.RESOURCES[tile.resource].harvest} gold.</div>`;
+      panel.innerHTML = html;
+      return;
+    }
+  }
+
   panel.innerHTML = defaultHint();
 }
 
@@ -564,6 +671,29 @@ function renderLog() {
     li.innerHTML = `<span class="lt">T${e.turn}</span> ${escapeHtml(e.msg)}`;
     ul.appendChild(li);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Mobile bottom sheet
+// ---------------------------------------------------------------------------
+function isMobileLayout() { return window.matchMedia('(max-width: 760px)').matches; }
+
+function setSheetTab(tab) {
+  document.querySelectorAll('.sheet-tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
+  $('selection-panel').classList.toggle('tab-hidden', tab !== 'sel');
+  $('log-panel').classList.toggle('tab-hidden', tab !== 'log');
+}
+
+function toggleSheet(force) {
+  const open = force != null ? force : !$('sidebar').classList.contains('open');
+  $('sidebar').classList.toggle('open', open);
+  $('sheet-toggle').textContent = open ? '▾' : '▴';
+  // Resize the board to the space the sheet leaves behind.
+  requestAnimationFrame(() => { resizeCanvas(); clampCamera(); render(); });
+}
+
+function openSheetIfMobile() {
+  if (isMobileLayout()) { setSheetTab('sel'); toggleSheet(true); }
 }
 
 function maybeGameOver() {

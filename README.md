@@ -28,15 +28,21 @@ take theirs.
 
 ### Controls
 
-| Action | How |
-| --- | --- |
-| Select unit / city | Click it |
-| Move / attack | Select your unit, then click a highlighted tile (blue = move, red = attack) |
-| Unit / city actions | Use the right-hand panel (Found City, Build, Harvest, Train, Fortify…) |
-| Pan the map | Click-drag |
-| Zoom | Mouse wheel |
-| End turn | `Space` or the End Turn button |
-| Clear selection | `Esc` |
+The game is built to play well with touch (Chrome on a phone) or mouse.
+
+| Action | Touch | Mouse / keyboard |
+| --- | --- | --- |
+| Select unit / city / tile | Tap | Click |
+| Move / attack | Tap a highlighted tile (blue = move, red = attack) | Click it |
+| Unit / city actions | Bottom sheet (Found City, Build, Harvest, Train, Fortify…) | Right-hand panel |
+| Pan the map | One-finger drag | Click-drag |
+| Zoom | Pinch, or the ＋ / － buttons | Mouse wheel or ＋ / － |
+| Show / hide info panel | Tap the ▴ handle; switch Selection / Chronicle tabs | (always visible) |
+| End turn | End Turn button | `Space` |
+| Clear selection | — | `Esc` |
+
+On phones the side panel becomes a collapsible **bottom sheet** so the map stays
+front-and-centre; it pops open automatically when you select something.
 
 ## Running it
 
@@ -50,6 +56,24 @@ npm start
 
 For auto-reload during development: `npm run dev`. Run the engine tests with
 `npm test`.
+
+## Deploying to Render
+
+This repo includes a [`render.yaml`](./render.yaml) blueprint.
+
+1. Push the repo to GitHub.
+2. In the Render dashboard: **New → Blueprint**, point it at the repo, and apply.
+   (Or **New → Web Service** with Build Command `npm install` and Start Command
+   `npm start` — Render injects `PORT` automatically.)
+3. *(Optional but recommended)* add a `DATABASE_URL` environment variable in the
+   Render dashboard with your Neon connection string so saved games survive
+   restarts and deploys.
+
+> ⚠️ Without `DATABASE_URL`, saves go to the container's local filesystem, which
+> Render wipes on every deploy/restart. Set the Neon string to keep your games.
+
+Once it's live, open the URL on your phone's Chrome browser and play — and add it
+to your home screen for a full-screen, app-like experience.
 
 ## Saving games (Neon / Postgres)
 
@@ -100,6 +124,16 @@ test/
 The server is authoritative: the client sends actions (`move`, `attack`,
 `found_city`, `build`, `harvest`, `buy_unit`, `fortify`, `end_turn`) and renders
 whatever state the server returns, including per-unit movement/attack hints.
+
+## Roadmap
+
+- ✅ Single-player vs AI, mobile-friendly touch controls, Render-ready, optional
+  Neon persistence.
+- ⏳ **Two-player games.** The server is already authoritative (clients only send
+  actions and render returned state), so multiplayer is mostly a matter of adding
+  per-player identity/turn gating and a way to share a game id between two
+  devices.
+- ⏳ Polishing core gameplay balance based on playtesting.
 
 ## License
 
