@@ -250,10 +250,12 @@ function bindGameControls() {
   $('btn-zoom-in').addEventListener('click', () => { zoomAt(G.view.cssW / 2, G.view.cssH / 2, 1.25); clampCamera(); render(); });
   $('btn-zoom-out').addEventListener('click', () => { zoomAt(G.view.cssW / 2, G.view.cssH / 2, 1 / 1.25); clampCamera(); render(); });
 
-  // Mobile bottom-sheet: drag handle toggles open/closed, tabs switch panels.
+  // Mobile bottom-sheet: handle toggles open/closed; tapping the hint also
+  // toggles; tapping a tab switches panel and expands the sheet on demand.
   $('sheet-toggle').addEventListener('click', () => toggleSheet());
+  $('sheet-hint').addEventListener('click', () => toggleSheet());
   document.querySelectorAll('.sheet-tabs button').forEach((b) => {
-    b.addEventListener('click', () => setSheetTab(b.dataset.tab));
+    b.addEventListener('click', () => { setSheetTab(b.dataset.tab); if (isMobileLayout()) toggleSheet(true); });
   });
 
   // Keyboard: space ends turn, Esc clears selection.
@@ -395,7 +397,10 @@ async function onClickBoard(sx, sy) {
   else if (unitHere) { G.selUnit = unitHere.id; G.selCity = null; } // inspect enemy unit
   else if (cityHere) { G.selCity = cityHere.id; G.selUnit = null; }
   else { G.selUnit = null; G.selCity = null; G.selTile = t; } // inspect bare terrain
-  openSheetIfMobile();
+  // Note: we intentionally do NOT force the bottom sheet open here, so a player
+  // who minimized it can keep tapping the map without it popping back up. The
+  // collapsed bar shows what's selected; tap the handle or a tab to expand.
+  setSheetTab('sel');
   renderSelection(); render();
 }
 
@@ -608,6 +613,7 @@ function renderSelection() {
   const panel = $('selection-panel');
   const s = G.state;
   const human = s.players.find((p) => p.isHuman);
+  updateSheetHint();
 
   if (G.selUnit) {
     const u = s.units.find((x) => x.id === G.selUnit);
@@ -763,16 +769,32 @@ function setSheetTab(tab) {
   $('log-panel').classList.toggle('tab-hidden', tab !== 'log');
 }
 
-function toggleSheet(force) {
-  const open = force != null ? force : !$('sidebar').classList.contains('open');
-  $('sidebar').classList.toggle('open', open);
-  $('sheet-toggle').textContent = open ? '▾' : '▴';
+function sheetIsOpen() { return $('sidebar').classList.contains('open'); }
+
+function toggleSheet(open) {
+  const isOpen = open != null ? open : !sheetIsOpen();
+  $('sidebar').classList.toggle('open', isOpen);
+  $('sheet-toggle').textContent = isOpen ? '▾ Hide' : '▴ Show';
+  $('sheet-toggle').setAttribute('aria-label', isOpen ? 'Minimize panel' : 'Expand panel');
   // Resize the board to the space the sheet leaves behind.
   requestAnimationFrame(() => { resizeCanvas(); clampCamera(); render(); });
 }
 
-function openSheetIfMobile() {
-  if (isMobileLayout()) { setSheetTab('sel'); toggleSheet(true); }
+// Short summary of the current selection, shown in the collapsed sheet bar so a
+// player who minimized the panel still knows what's selected.
+function updateSheetHint() {
+  const el = $('sheet-hint');
+  if (!el) return;
+  const s = G.state;
+  let text = '';
+  if (G.selUnit) {
+    const u = s.units.find((x) => x.id === G.selUnit);
+    if (u) text = `${G.defs.UNITS[u.type].icon} ${G.defs.UNITS[u.type].name}`;
+  } else if (G.selCity) {
+    const c = s.cities.find((x) => x.id === G.selCity);
+    if (c) text = `★ ${c.name}`;
+  }
+  el.textContent = text;
 }
 
 function maybeGameOver() {
