@@ -27,7 +27,54 @@ const G = {
   pinch: null,
 };
 
-const TILE = 64; // base tile size in world pixels
+// --- Hex grid geometry (pointy-top, odd-r offset) ----------------------------
+const HEX_S = 40;                      // hex "radius" (centre to corner) in world px
+const HEX_W = Math.sqrt(3) * HEX_S;    // width across the flats
+const HEX_H = 2 * HEX_S;               // full height (corner to corner)
+const HEX_VSTEP = 1.5 * HEX_S;         // vertical distance between row centres
+const ORIGIN_X = HEX_W / 2;            // margin so col 0 isn't clipped
+const ORIGIN_Y = HEX_S;
+
+// World-pixel centre of the hex at offset (col,row). Odd rows shift right.
+function hexCenter(col, row) {
+  return {
+    x: ORIGIN_X + HEX_W * (col + (row & 1) * 0.5),
+    y: ORIGIN_Y + HEX_VSTEP * row,
+  };
+}
+
+// Trace a pointy-top hexagon path centred at (cx,cy) (caller fills/strokes).
+function hexPath(cx, cy, r = HEX_S) {
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const a = Math.PI / 180 * (60 * i - 90); // vertex at the top
+    const x = cx + r * Math.cos(a), y = cy + r * Math.sin(a);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+}
+
+function hexRound(qf, rf) {
+  let x = qf, z = rf, y = -qf - rf;
+  let rx = Math.round(x), ry = Math.round(y), rz = Math.round(z);
+  const dx = Math.abs(rx - x), dy = Math.abs(ry - y), dz = Math.abs(rz - z);
+  if (dx > dy && dx > dz) rx = -ry - rz;
+  else if (dy > dz) ry = -rx - rz;
+  else rz = -rx - ry;
+  return { q: rx, r: rz };
+}
+
+// World pixel -> tile {x:col, y:row}, or null if outside the map.
+function worldToTile(wx, wy) {
+  const px = wx - ORIGIN_X, py = wy - ORIGIN_Y;
+  const qf = (Math.sqrt(3) / 3 * px - 1 / 3 * py) / HEX_S;
+  const rf = (2 / 3 * py) / HEX_S;
+  const { q, r } = hexRound(qf, rf);
+  const col = q + ((r - (r & 1)) / 2);
+  const row = r;
+  if (col < 0 || row < 0 || col >= G.state.width || row >= G.state.height) return null;
+  return { x: col, y: row };
+}
 
 // ---------------------------------------------------------------------------
 // Boot
@@ -37,20 +84,47 @@ window.addEventListener('DOMContentLoaded', async () => {
   bindMenu();
   bindGameControls();
   await refreshSavedGames();
+  await tryResume();
 });
+
+const LAST_GAME_KEY = 'tribes.lastGameId';
+
+// If we were in a game before a reload/refresh, drop the player straight back in.
+async function tryResume() {
+  let id;
+  try { id = localStorage.getItem(LAST_GAME_KEY); } catch { id = null; }
+  if (!id) return;
+  try {
+    const res = await api.get('/api/games/' + id);
+    if (res && res.state && res.state.id) { enterGame(res.state); return; }
+  } catch { /* fall through to menu */ }
+  try { localStorage.removeItem(LAST_GAME_KEY); } catch {}
+}
 
 function bindMenu() {
   $('ng-start').addEventListener('click', startNewGame);
   $('go-menu').addEventListener('click', () => { $('gameover').classList.add('hidden'); showMenu(); });
   $('btn-menu').addEventListener('click', showMenu);
+  $('btn-refresh').addEventListener('click', refreshSavedGames);
 }
 
 async function refreshSavedGames() {
-  const { games, storage } = await api.get('/api/games');
-  $('storage-badge').textContent = storage === 'postgres' ? 'Neon DB' : 'local files';
   const ul = $('saved-list');
+  ul.innerHTML = '<li class="empty">Loading…</li>';
+  let games, storage, error;
+  try {
+    const res = await api.get('/api/games');
+    games = res.games; storage = res.storage; error = res.error;
+  } catch (e) {
+    error = e.message || 'Network error';
+  }
+  $('storage-badge').textContent = storage === 'postgres' ? 'Neon DB' : (storage ? 'local files' : '—');
   ul.innerHTML = '';
-  if (!games.length) { ul.innerHTML = '<li class="empty">No saved games yet.</li>'; return; }
+  if (error) {
+    ul.innerHTML = `<li class="empty err">Couldn't load saved games: ${escapeHtml(error)}</li>`;
+    return;
+  }
+  if (!games || !games.length) { ul.innerHTML = '<li class="empty">No saved games yet.</li>'; return; }
   for (const g of games) {
     const li = document.createElement('li');
     const when = g.updatedAt ? new Date(g.updatedAt).toLocaleString() : '';
@@ -65,7 +139,9 @@ async function refreshSavedGames() {
       </div>`;
     li.querySelector('.load').addEventListener('click', () => loadGame(g.id));
     li.querySelector('.del').addEventListener('click', async () => {
-      await api.del('/api/games/' + g.id); refreshSavedGames();
+      await api.del('/api/games/' + g.id);
+      try { if (localStorage.getItem(LAST_GAME_KEY) === g.id) localStorage.removeItem(LAST_GAME_KEY); } catch {}
+      refreshSavedGames();
     });
     ul.appendChild(li);
   }
@@ -99,6 +175,7 @@ let canvas, ctx;
 function enterGame(state) {
   G.state = state;
   G.gameId = state.id;
+  try { localStorage.setItem(LAST_GAME_KEY, state.id); } catch {}
   G.selUnit = null; G.selCity = null;
   $('menu').classList.add('hidden');
   $('game').classList.remove('hidden');
@@ -123,9 +200,10 @@ function centerOnHumanStart() {
   const focus = c || u;
   if (focus) { fx = focus.x; fy = focus.y; }
   // Fit a few tiles on screen at a sensible default zoom for phones.
-  G.cam.scale = G.view.cssW < 560 ? Math.max(0.6, Math.min(1, G.view.cssW / (6 * TILE))) : 1;
-  G.cam.x = fx * TILE + TILE / 2 - G.view.cssW / (2 * G.cam.scale);
-  G.cam.y = fy * TILE + TILE / 2 - G.view.cssH / (2 * G.cam.scale);
+  G.cam.scale = G.view.cssW < 560 ? Math.max(0.6, Math.min(1, G.view.cssW / (6 * HEX_W))) : 1;
+  const c0 = hexCenter(fx, fy);
+  G.cam.x = c0.x - G.view.cssW / (2 * G.cam.scale);
+  G.cam.y = c0.y - G.view.cssH / (2 * G.cam.scale);
   clampCamera();
 }
 
@@ -265,7 +343,8 @@ function setScaleAt(sx, sy, newScale) {
 }
 
 function clampCamera() {
-  const worldW = G.state.width * TILE, worldH = G.state.height * TILE;
+  const worldW = HEX_W * (G.state.width + 0.5) + ORIGIN_X;
+  const worldH = HEX_VSTEP * (G.state.height - 1) + HEX_H + ORIGIN_Y;
   const viewW = G.view.cssW / G.cam.scale, viewH = G.view.cssH / G.cam.scale;
   if (worldW <= viewW) G.cam.x = (worldW - viewW) / 2;
   else G.cam.x = Math.max(-40, Math.min(worldW - viewW + 40, G.cam.x));
@@ -276,9 +355,7 @@ function clampCamera() {
 function screenToTile(sx, sy) {
   const wx = G.cam.x + sx / G.cam.scale;
   const wy = G.cam.y + sy / G.cam.scale;
-  const x = Math.floor(wx / TILE), y = Math.floor(wy / TILE);
-  if (x < 0 || y < 0 || x >= G.state.width || y >= G.state.height) return null;
-  return { x, y };
+  return worldToTile(wx, wy);
 }
 
 // ---------------------------------------------------------------------------
@@ -397,48 +474,52 @@ function render() {
   const moveSet = new Set(hints ? hints.moves.map((m) => m.x + ',' + m.y) : []);
   const atkSet = new Set(hints ? hints.attacks.map((m) => m.x + ',' + m.y) : []);
 
+  // Visible world rect (+margin) so we only draw hexes that are on screen.
+  const vx0 = G.cam.x - HEX_W, vy0 = G.cam.y - HEX_H;
+  const vx1 = G.cam.x + G.view.cssW / G.cam.scale + HEX_W;
+  const vy1 = G.cam.y + G.view.cssH / G.cam.scale + HEX_H;
+
   // Tiles
   for (let y = 0; y < s.height; y++) {
     for (let x = 0; x < s.width; x++) {
+      const c = hexCenter(x, y);
+      if (c.x < vx0 || c.x > vx1 || c.y < vy0 || c.y > vy1) continue; // cull
       const tile = s.tiles[y * s.width + x];
-      const px = x * TILE, py = y * TILE;
+      hexPath(c.x, c.y);
       ctx.fillStyle = G.defs.TERRAIN[tile.terrain].color;
-      ctx.fillRect(px, py, TILE, TILE);
-      // subtle texture
-      ctx.fillStyle = 'rgba(0,0,0,0.06)';
-      if ((x + y) % 2 === 0) ctx.fillRect(px, py, TILE, TILE);
+      ctx.fill();
+      // subtle checker texture
+      if ((x + y) % 2 === 0) { ctx.fillStyle = 'rgba(0,0,0,0.06)'; ctx.fill(); }
 
       // territory tint
       if (tile.ownerCity) {
-        const city = s.cities.find((c) => c.id === tile.ownerCity);
+        const city = s.cities.find((cc) => cc.id === tile.ownerCity);
         if (city) {
           const owner = s.players.find((p) => p.id === city.owner);
-          ctx.fillStyle = hexA(owner.color, 0.18);
-          ctx.fillRect(px, py, TILE, TILE);
+          ctx.fillStyle = hexA(owner.color, 0.20); ctx.fill();
         }
       }
 
-      // improvement / resource glyphs
-      if (tile.improvement) {
-        drawGlyph(G.defs.IMPROVEMENTS[tile.improvement].icon, px + TILE - 16, py + TILE - 10, 16, 'rgba(255,255,255,.8)');
-      }
-      if (tile.resource) {
-        drawGlyph(G.defs.RESOURCES[tile.resource].icon, px + 14, py + 18, 18, G.defs.RESOURCES[tile.resource].color);
-      }
-
-      // grid line
-      ctx.strokeStyle = 'rgba(0,0,0,0.18)';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(px + .5, py + .5, TILE, TILE);
-
-      // highlights for selected unit
+      // move / attack highlights
       const key = x + ',' + y;
-      if (atkSet.has(key)) { ctx.fillStyle = 'rgba(224,82,82,0.42)'; ctx.fillRect(px, py, TILE, TILE); }
-      else if (moveSet.has(key)) { ctx.fillStyle = 'rgba(79,157,222,0.28)'; ctx.fillRect(px, py, TILE, TILE); }
+      if (atkSet.has(key)) { ctx.fillStyle = 'rgba(224,82,82,0.42)'; ctx.fill(); }
+      else if (moveSet.has(key)) { ctx.fillStyle = 'rgba(79,157,222,0.30)'; ctx.fill(); }
+
+      // resource / improvement glyphs
+      if (tile.resource) {
+        drawGlyph(G.defs.RESOURCES[tile.resource].icon, c.x, c.y - HEX_S * 0.34, 17, G.defs.RESOURCES[tile.resource].color);
+      }
+      if (tile.improvement) {
+        drawGlyph(G.defs.IMPROVEMENTS[tile.improvement].icon, c.x + HEX_W * 0.26, c.y + HEX_S * 0.5, 15, 'rgba(255,255,255,.85)');
+      }
+
+      // grid outline
+      hexPath(c.x, c.y);
+      ctx.strokeStyle = 'rgba(0,0,0,0.22)'; ctx.lineWidth = 1; ctx.stroke();
 
       if (G.hoverTile && G.hoverTile.x === x && G.hoverTile.y === y) {
-        ctx.strokeStyle = 'rgba(255,255,255,0.65)'; ctx.lineWidth = 2;
-        ctx.strokeRect(px + 1, py + 1, TILE - 2, TILE - 2);
+        hexPath(c.x, c.y, HEX_S - 1);
+        ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 2; ctx.stroke();
       }
     }
   }
@@ -446,36 +527,34 @@ function render() {
   // Cities
   for (const c of s.cities) {
     const owner = s.players.find((p) => p.id === c.owner);
-    const px = c.x * TILE, py = c.y * TILE;
-    ctx.fillStyle = owner.color;
-    roundRect(px + 8, py + 8, TILE - 16, TILE - 16, 7); ctx.fill();
+    const ct = hexCenter(c.x, c.y);
+    hexPath(ct.x, ct.y, HEX_S * 0.74);
+    ctx.fillStyle = owner.color; ctx.fill();
     ctx.strokeStyle = 'rgba(0,0,0,.5)'; ctx.lineWidth = 2; ctx.stroke();
-    drawGlyph('★', px + TILE / 2, py + TILE / 2 + 6, 22, '#fff', 'center');
-    // name + hp
-    label(c.name, px + TILE / 2, py - 4, owner.color);
-    hpBar(px + 10, py + TILE - 9, TILE - 20, c.hp / c.maxHp, '#e0c050');
-    // pop badge
-    ctx.fillStyle = '#000a'; roundRect(px + TILE - 22, py + 4, 18, 16, 4); ctx.fill();
-    drawGlyph(String(c.population), px + TILE - 13, py + 16, 12, '#fff', 'center');
-    if (G.selCity === c.id) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.strokeRect(px + 5, py + 5, TILE - 10, TILE - 10); }
+    drawGlyph('★', ct.x, ct.y + HEX_S * 0.28, 22, '#fff', 'center');
+    label(c.name, ct.x, ct.y - HEX_S * 0.66, owner.color);
+    hpBar(ct.x - HEX_W * 0.32, ct.y + HEX_S * 0.62, HEX_W * 0.64, c.hp / c.maxHp, '#e0c050');
+    // population badge
+    ctx.fillStyle = '#000a'; roundRect(ct.x + HEX_W * 0.16, ct.y - HEX_S * 0.5, 18, 16, 4); ctx.fill();
+    drawGlyph(String(c.population), ct.x + HEX_W * 0.16 + 9, ct.y - HEX_S * 0.5 + 12, 12, '#fff', 'center');
+    if (G.selCity === c.id) { hexPath(ct.x, ct.y, HEX_S - 2); ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.stroke(); }
   }
 
   // Units
   for (const u of s.units) {
     const owner = s.players.find((p) => p.id === u.owner);
     const ud = G.defs.UNITS[u.type];
-    const px = u.x * TILE, py = u.y * TILE;
-    // body circle
+    const ct = hexCenter(u.x, u.y);
+    const r = HEX_S * 0.44;
     ctx.beginPath();
-    ctx.arc(px + TILE / 2, py + TILE / 2, TILE * 0.27, 0, Math.PI * 2);
+    ctx.arc(ct.x, ct.y, r, 0, Math.PI * 2);
     ctx.fillStyle = owner.color; ctx.fill();
-    ctx.lineWidth = 2; ctx.strokeStyle = u.movesLeft > 0 && owner.isHuman ? '#fff' : 'rgba(0,0,0,.55)'; ctx.stroke();
-    drawGlyph(ud.icon, px + TILE / 2, py + TILE / 2 + 7, 22, '#fff', 'center');
-    // hp bar for military
-    if (ud.role === 'military') hpBar(px + 12, py + TILE - 12, TILE - 24, u.hp / u.maxHp, '#4caf50');
-    if (u.fortified) drawGlyph('⛨', px + TILE - 14, py + 16, 13, '#cfd8e0', 'center');
+    ctx.lineWidth = 2; ctx.strokeStyle = (u.movesLeft > 0 && owner.isHuman) ? '#fff' : 'rgba(0,0,0,.55)'; ctx.stroke();
+    drawGlyph(ud.icon, ct.x, ct.y + 7, 21, '#fff', 'center');
+    if (ud.role === 'military') hpBar(ct.x - HEX_W * 0.28, ct.y + HEX_S * 0.5, HEX_W * 0.56, u.hp / u.maxHp, '#4caf50');
+    if (u.fortified) drawGlyph('⛨', ct.x + HEX_W * 0.26, ct.y - HEX_S * 0.3, 13, '#cfd8e0', 'center');
     if (G.selUnit === u.id) {
-      ctx.beginPath(); ctx.arc(px + TILE / 2, py + TILE / 2, TILE * 0.33, 0, Math.PI * 2);
+      ctx.beginPath(); ctx.arc(ct.x, ct.y, r + HEX_S * 0.12, 0, Math.PI * 2);
       ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.stroke();
     }
   }

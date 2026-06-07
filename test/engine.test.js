@@ -3,9 +3,29 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createGame, applyAction, reachableTiles, reseedIdCounter, tileAt,
+  hexNeighbors, hexDistance,
 } from '../server/game/engine.js';
 
 function humanId(state) { return state.players.find((p) => p.isHuman).id; }
+
+test('hex geometry: every hex has 6 neighbours each at distance 1', () => {
+  // Sample interior tiles on both row parities.
+  for (const [x, y] of [[5, 4], [5, 5], [8, 6], [3, 7]]) {
+    const ns = hexNeighbors(x, y);
+    assert.equal(ns.length, 6);
+    const seen = new Set();
+    for (const [nx, ny] of ns) {
+      assert.equal(hexDistance(x, y, nx, ny), 1, `(${nx},${ny}) should be distance 1 from (${x},${y})`);
+      seen.add(`${nx},${ny}`);
+      // Neighbour relation is symmetric.
+      assert.ok(hexNeighbors(nx, ny).some(([a, b]) => a === x && b === y), 'neighbour is mutual');
+    }
+    assert.equal(seen.size, 6, 'neighbours are distinct');
+  }
+  assert.equal(hexDistance(5, 5, 5, 5), 0, 'distance to self is 0');
+  // A straight run east should grow by exactly 1 each step.
+  assert.equal(hexDistance(2, 4, 5, 4), 3);
+});
 
 test('createGame produces a valid initial state', () => {
   const s = createGame({ width: 16, height: 10, aiPlayers: 1, seed: 42 });

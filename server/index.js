@@ -47,8 +47,14 @@ app.get('/api/defs', (req, res) => {
 });
 
 app.get('/api/games', async (req, res) => {
-  try { res.json({ games: await listGames(), storage: storageMode() }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  // Always 200 so the client can render the storage badge and a clear message;
+  // a DB error becomes an inline note rather than a broken list.
+  try {
+    res.json({ games: await listGames(), storage: storageMode() });
+  } catch (e) {
+    console.error('[api] listGames failed:', e.message);
+    res.json({ games: [], storage: storageMode(), error: e.message });
+  }
 });
 
 app.post('/api/games', async (req, res) => {
