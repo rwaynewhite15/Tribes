@@ -1,0 +1,23 @@
+{
+  "name": "tribes",
+  "version": "1.0.0",
+  "description": "A simple Civilization-style domination strategy game. Settle cities, develop the land, build armies, and conquer your rivals.",
+  "type": "module",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "test": "node --test"
+  },
+  "keywords": [
+    "game",
+    "strategy",
+    "civilization",
+    "domination"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.19.2",
+    "pg": "^8.12.0"
+  }
+}

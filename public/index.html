@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tribes — Domination</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Main menu / saved games -->
+  <div id="menu" class="screen">
+    <div class="menu-card">
+      <h1>⚔ TRIBES</h1>
+      <p class="tagline">Settle. Develop. Conquer. A Civilization-style domination game.</p>
+
+      <div class="new-game">
+        <h2>New Game</h2>
+        <label>Game name <input id="ng-name" type="text" value="My Empire" maxlength="40" /></label>
+        <div class="row">
+          <label>Map size
+            <select id="ng-size">
+              <option value="14x10">Small (14×10)</option>
+              <option value="18x12" selected>Standard (18×12)</option>
+              <option value="24x16">Large (24×16)</option>
+            </select>
+          </label>
+          <label>Rivals
+            <select id="ng-ai">
+              <option value="1" selected>1</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+            </select>
+          </label>
+        </div>
+        <button id="ng-start" class="primary">Begin Conquest</button>
+      </div>
+
+      <div class="saved-games">
+        <h2>Saved Games <span id="storage-badge" class="badge"></span></h2>
+        <ul id="saved-list"><li class="empty">Loading…</li></ul>
+      </div>
+    </div>
+    <footer>Capture every rival city to win a Domination Victory.</footer>
+  </div>
+
+  <!-- In-game -->
+  <div id="game" class="screen hidden">
+    <header id="topbar">
+      <div class="hud-left">
+        <button id="btn-menu" class="ghost">☰ Menu</button>
+        <span class="hud-item">Turn <b id="hud-turn">1</b></span>
+        <span class="hud-item gold">⛁ <b id="hud-gold">0</b> <small id="hud-gpt">(+0/turn)</small></span>
+        <span class="hud-item">Cities <b id="hud-cities">0</b></span>
+      </div>
+      <div class="hud-right">
+        <span id="hud-status" class="status"></span>
+        <button id="btn-end" class="primary">End Turn ⏭</button>
+      </div>
+    </header>
+
+    <div class="main">
+      <div id="board-wrap">
+        <canvas id="board"></canvas>
+        <div id="tooltip" class="hidden"></div>
+      </div>
+
+      <aside id="sidebar">
+        <div id="selection-panel">
+          <p class="hint">Click a tile or unit to begin. Select your <b>Settler</b> and press <b>Found City</b>.</p>
+        </div>
+        <div id="log-panel">
+          <h3>Chronicle</h3>
+          <ul id="log-list"></ul>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <!-- Game over overlay -->
+  <div id="gameover" class="overlay hidden">
+    <div class="overlay-card">
+      <h2 id="go-title">Victory!</h2>
+      <p id="go-msg"></p>
+      <button id="go-menu" class="primary">Back to Menu</button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="game.js"></script>
+</body>
+</html>
