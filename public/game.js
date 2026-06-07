@@ -781,6 +781,7 @@ function buildUnitActions(u) {
       const imp = G.defs.IMPROVEMENTS[canImp];
       if (ownedByMe) {
         btns.push(actBtn(`${imp.icon} Build ${imp.name}`, () => doAction({ type: 'build', unitId: u.id, improvement: canImp })));
+        notes.push('Completing it adds a citizen and expands the city border.');
       } else {
         notes.push(`A ${imp.name} only earns gold on your own land — move the builder onto a tile one of your cities works.`);
       }

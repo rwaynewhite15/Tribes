@@ -562,7 +562,11 @@ function doBuild(state, player, { unitId, improvement }) {
   tile.improvement = improvement;
   unit.movesLeft = 0;
   unit.charges -= 1;
-  pushLog(state, `${player.name} built a ${def.name}.`);
+  // A completed improvement draws a new citizen to the owning city and pushes
+  // its border one tile outward (toward the nearest rival).
+  ownerCity.population += 1;
+  const grew = expandCityBorder(state, ownerCity);
+  pushLog(state, `${player.name} built a ${def.name}; ${ownerCity.name} gained a citizen${grew ? ' and expanded its borders' : ''}.`);
   if (unit.charges <= 0) {
     removeUnit(state, unit.id);
     pushLog(state, 'Builder exhausted and disbanded.');

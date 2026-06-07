@@ -81,6 +81,26 @@ test('builders can only improve tiles inside their own territory', () => {
   assert.equal(far.improvement, null, 'no improvement placed off-territory');
 });
 
+test('building an improvement adds a citizen and a new owned tile', () => {
+  const s = createGame({ width: 18, height: 12, aiPlayers: 1, seed: 7 });
+  const hid = humanId(s);
+  const settler = s.units.find((u) => u.owner === hid && u.type === 'settler');
+  applyAction(s, hid, { type: 'found_city', unitId: settler.id });
+  const city = s.cities[0];
+
+  const owned = s.tiles.find((t) => t.ownerCity === city.id && !(t.x === city.x && t.y === city.y));
+  owned.terrain = 'hills'; owned.improvement = null; owned.resource = null;
+  const builder = { id: 'ub1', owner: hid, type: 'builder', x: owned.x, y: owned.y, hp: 20, maxHp: 20, movesLeft: 2, fortified: false, charges: 3 };
+  s.units.push(builder);
+
+  const popBefore = city.population;
+  const ownedBefore = s.tiles.filter((t) => t.ownerCity === city.id).length;
+  const res = applyAction(s, hid, { type: 'build', unitId: builder.id, improvement: 'mine' });
+  assert.ok(res.ok, res.error);
+  assert.equal(city.population, popBefore + 1, 'improvement adds a citizen');
+  assert.equal(s.tiles.filter((t) => t.ownerCity === city.id).length, ownedBefore + 1, 'improvement expands territory by one tile');
+});
+
 test('a player can purchase a bordering tile to expand a city', () => {
   const s = createGame({ width: 18, height: 12, aiPlayers: 1, seed: 7 });
   const hid = humanId(s);
