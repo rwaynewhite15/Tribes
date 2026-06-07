@@ -535,6 +535,43 @@ function render() {
     }
   }
 
+  // Territory borders: draw a coloured edge wherever a civ's land meets a tile
+  // that isn't part of the same civ. The border is inset slightly so each
+  // civ's outline stays within its own hexes (no colour clash on shared edges).
+  const tileOwnerId = (t) => {
+    if (!t || !t.ownerCity) return null;
+    const city = s.cities.find((cc) => cc.id === t.ownerCity);
+    return city ? city.owner : null;
+  };
+  const rIn = HEX_S - 2;
+  ctx.lineCap = 'round';
+  ctx.lineWidth = 3;
+  for (let y = 0; y < s.height; y++) {
+    for (let x = 0; x < s.width; x++) {
+      const tile = s.tiles[y * s.width + x];
+      const ownerId = tileOwnerId(tile);
+      if (!ownerId) continue;
+      const c = hexCenter(x, y);
+      if (c.x < vx0 || c.x > vx1 || c.y < vy0 || c.y > vy1) continue; // cull
+      const owner = s.players.find((p) => p.id === ownerId);
+      for (let i = 0; i < 6; i++) {
+        // Neighbour across edge i sits at the edge's outward normal (60i-60°).
+        const midA = Math.PI / 180 * (60 * i - 60);
+        const nt = worldToTile(c.x + HEX_W * Math.cos(midA), c.y + HEX_W * Math.sin(midA));
+        const nOwner = nt ? tileOwnerId(s.tiles[nt.y * s.width + nt.x]) : null;
+        if (nOwner === ownerId) continue; // interior edge — skip
+        const a0 = Math.PI / 180 * (60 * i - 90);
+        const a1 = Math.PI / 180 * (60 * (i + 1) - 90);
+        ctx.beginPath();
+        ctx.moveTo(c.x + rIn * Math.cos(a0), c.y + rIn * Math.sin(a0));
+        ctx.lineTo(c.x + rIn * Math.cos(a1), c.y + rIn * Math.sin(a1));
+        ctx.strokeStyle = owner.color;
+        ctx.stroke();
+      }
+    }
+  }
+  ctx.lineCap = 'butt';
+
   // Cities
   for (const c of s.cities) {
     const owner = s.players.find((p) => p.id === c.owner);
