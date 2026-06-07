@@ -226,6 +226,12 @@ function resizeCanvas() {
 // Controls
 // ---------------------------------------------------------------------------
 function bindGameControls() {
+  // The canvas element is static in the HTML, so grab it now. (enterGame also
+  // sets these, but we must bind listeners to the real element here, not to the
+  // still-undefined module variable, or every game control fails to attach.)
+  canvas = $('board');
+  ctx = canvas.getContext('2d');
+
   $('btn-end').addEventListener('click', endTurn);
 
   // Unified pointer handling works for touch, pen and mouse:
