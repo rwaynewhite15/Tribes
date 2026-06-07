@@ -37,20 +37,47 @@ window.addEventListener('DOMContentLoaded', async () => {
   bindMenu();
   bindGameControls();
   await refreshSavedGames();
+  await tryResume();
 });
+
+const LAST_GAME_KEY = 'tribes.lastGameId';
+
+// If we were in a game before a reload/refresh, drop the player straight back in.
+async function tryResume() {
+  let id;
+  try { id = localStorage.getItem(LAST_GAME_KEY); } catch { id = null; }
+  if (!id) return;
+  try {
+    const res = await api.get('/api/games/' + id);
+    if (res && res.state && res.state.id) { enterGame(res.state); return; }
+  } catch { /* fall through to menu */ }
+  try { localStorage.removeItem(LAST_GAME_KEY); } catch {}
+}
 
 function bindMenu() {
   $('ng-start').addEventListener('click', startNewGame);
   $('go-menu').addEventListener('click', () => { $('gameover').classList.add('hidden'); showMenu(); });
   $('btn-menu').addEventListener('click', showMenu);
+  $('btn-refresh').addEventListener('click', refreshSavedGames);
 }
 
 async function refreshSavedGames() {
-  const { games, storage } = await api.get('/api/games');
-  $('storage-badge').textContent = storage === 'postgres' ? 'Neon DB' : 'local files';
   const ul = $('saved-list');
+  ul.innerHTML = '<li class="empty">Loading…</li>';
+  let games, storage, error;
+  try {
+    const res = await api.get('/api/games');
+    games = res.games; storage = res.storage; error = res.error;
+  } catch (e) {
+    error = e.message || 'Network error';
+  }
+  $('storage-badge').textContent = storage === 'postgres' ? 'Neon DB' : (storage ? 'local files' : '—');
   ul.innerHTML = '';
-  if (!games.length) { ul.innerHTML = '<li class="empty">No saved games yet.</li>'; return; }
+  if (error) {
+    ul.innerHTML = `<li class="empty err">Couldn't load saved games: ${escapeHtml(error)}</li>`;
+    return;
+  }
+  if (!games || !games.length) { ul.innerHTML = '<li class="empty">No saved games yet.</li>'; return; }
   for (const g of games) {
     const li = document.createElement('li');
     const when = g.updatedAt ? new Date(g.updatedAt).toLocaleString() : '';
@@ -65,7 +92,9 @@ async function refreshSavedGames() {
       </div>`;
     li.querySelector('.load').addEventListener('click', () => loadGame(g.id));
     li.querySelector('.del').addEventListener('click', async () => {
-      await api.del('/api/games/' + g.id); refreshSavedGames();
+      await api.del('/api/games/' + g.id);
+      try { if (localStorage.getItem(LAST_GAME_KEY) === g.id) localStorage.removeItem(LAST_GAME_KEY); } catch {}
+      refreshSavedGames();
     });
     ul.appendChild(li);
   }
@@ -99,6 +128,7 @@ let canvas, ctx;
 function enterGame(state) {
   G.state = state;
   G.gameId = state.id;
+  try { localStorage.setItem(LAST_GAME_KEY, state.id); } catch {}
   G.selUnit = null; G.selCity = null;
   $('menu').classList.add('hidden');
   $('game').classList.remove('hidden');

@@ -18,7 +18,9 @@ body {
   background: var(--bg);
   color: var(--ink);
   overflow: hidden;
-  overscroll-behavior: none;
+  /* Note: pull-to-refresh is intentionally left enabled. The game board blocks
+     the gesture itself via `touch-action: none`, so the map never refreshes,
+     but you can still pull-to-refresh from the menu / top bar. */
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;
@@ -66,7 +68,10 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .new-game .row label { flex: 1; }
 #ng-start { width: 100%; margin-top: 4px; }
 
-.saved-games ul { list-style: none; max-height: 240px; overflow-y: auto; }
+.saved-games h2 { display: flex; align-items: center; gap: 8px; }
+#btn-refresh { margin-left: auto; padding: 4px 10px; font-size: 12px; }
+.saved-games ul { list-style: none; max-height: 240px; overflow-y: auto; overscroll-behavior: contain; }
+.saved-games li.empty.err { color: var(--danger); border-color: var(--danger); }
 .saved-games li {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
   background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
@@ -119,7 +124,7 @@ footer { color: var(--muted); font-size: 13px; }
   width: 320px; background: var(--panel); border-left: 1px solid var(--border);
   display: flex; flex-direction: column; min-height: 0;
 }
-#selection-panel { padding: 14px; border-bottom: 1px solid var(--border); overflow-y: auto; max-height: 62%; }
+#selection-panel { padding: 14px; border-bottom: 1px solid var(--border); overflow-y: auto; overscroll-behavior: contain; max-height: 62%; }
 .hint { color: var(--muted); font-size: 13px; line-height: 1.5; }
 .sel-title { display: flex; align-items: center; gap: 8px; font-size: 18px; margin-bottom: 4px; }
 .sel-title .ico { font-size: 22px; }
@@ -141,7 +146,7 @@ footer { color: var(--muted); font-size: 13px; }
 .buy-item .bi-cost { font-size: 12px; color: var(--accent); }
 .buy-item:disabled .bi-cost { color: var(--danger); }
 
-#log-panel { flex: 1; padding: 12px 14px; overflow-y: auto; min-height: 0; }
+#log-panel { flex: 1; padding: 12px 14px; overflow-y: auto; overscroll-behavior: contain; min-height: 0; }
 #log-panel h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--accent-2); margin-bottom: 8px; }
 #log-list { list-style: none; font-size: 12.5px; line-height: 1.5; }
 #log-list li { padding: 3px 0; border-bottom: 1px solid rgba(44,58,78,.4); color: var(--muted); }
