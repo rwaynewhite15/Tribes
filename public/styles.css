@@ -195,12 +195,13 @@ footer { color: var(--muted); font-size: 13px; }
   #sidebar.open { height: 54dvh; }
 
   #sheet-bar {
-    display: flex; align-items: center; gap: 10px; padding: 6px 10px;
+    display: flex; align-items: center; gap: 8px; padding: 6px 10px;
     border-bottom: 1px solid var(--border); flex: 0 0 auto;
   }
-  #sheet-toggle { width: 40px; height: 34px; padding: 0; font-size: 16px; }
-  .sheet-tabs { display: flex; gap: 6px; flex: 1; }
-  .sheet-tabs button { flex: 1; padding: 7px 8px; font-size: 13px; }
+  #sheet-toggle { height: 36px; padding: 0 12px; font-size: 13px; font-weight: 600; white-space: nowrap; background: var(--accent-2); color: #06121d; border-color: var(--accent-2); }
+  #sheet-hint { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-size: 13px; cursor: pointer; }
+  .sheet-tabs { display: flex; gap: 6px; flex: 0 0 auto; }
+  .sheet-tabs button { padding: 8px 10px; font-size: 13px; }
   .sheet-tabs button.active { background: var(--accent-2); color: #06121d; border-color: var(--accent-2); font-weight: 600; }
 
   #selection-panel { max-height: none; flex: 1; min-height: 0; }
