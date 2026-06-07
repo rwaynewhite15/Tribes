@@ -66,7 +66,12 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 }
 .new-game .row { display: flex; gap: 14px; }
 .new-game .row label { flex: 1; }
+.new-game .checkrow { display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--ink); margin-bottom: 14px; }
+.new-game .checkrow input { width: auto; margin: 0; }
 #ng-start { width: 100%; margin-top: 4px; }
+
+#watch-controls { display: flex; gap: 8px; }
+#hud-spectate { color: var(--accent); }
 
 .saved-games h2 { display: flex; align-items: center; gap: 8px; }
 #btn-refresh { margin-left: auto; padding: 4px 10px; font-size: 12px; }

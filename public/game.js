@@ -18,6 +18,7 @@ const G = {
   selUnit: null,   // selected unit id
   selCity: null,   // selected city id
   selTile: null,   // inspected bare-terrain tile {x,y}
+  spectate: false, // AI-only watch mode
   hoverTile: null,
   // camera + viewport (CSS pixels; dpr scales the backing buffer)
   cam: { x: 0, y: 0, scale: 1 },
@@ -106,6 +107,14 @@ function bindMenu() {
   $('go-menu').addEventListener('click', () => { $('gameover').classList.add('hidden'); showMenu(); });
   $('btn-menu').addEventListener('click', showMenu);
   $('btn-refresh').addEventListener('click', refreshSavedGames);
+  // Spectate toggle swaps the "Rivals" picker for a "Civilizations" picker and
+  // relabels the start button.
+  $('ng-spectate').addEventListener('change', (e) => {
+    const on = e.target.checked;
+    $('ng-ai-wrap').classList.toggle('hidden', on);
+    $('ng-civs-wrap').classList.toggle('hidden', !on);
+    $('ng-start').textContent = on ? 'Watch Game' : 'Begin Conquest';
+  });
 }
 
 async function refreshSavedGames() {
@@ -150,8 +159,9 @@ async function refreshSavedGames() {
 async function startNewGame() {
   const name = $('ng-name').value || 'My Empire';
   const [w, h] = $('ng-size').value.split('x').map(Number);
-  const aiPlayers = Number($('ng-ai').value);
-  const { ok, data } = await api.post('/api/games', { name, width: w, height: h, aiPlayers });
+  const spectate = $('ng-spectate').checked;
+  const aiPlayers = spectate ? Number($('ng-civs').value) : Number($('ng-ai').value);
+  const { ok, data } = await api.post('/api/games', { name, width: w, height: h, aiPlayers, spectate });
   if (!ok) { toast(data.error || 'Failed to create game'); return; }
   enterGame(data.state);
 }
@@ -163,6 +173,7 @@ async function loadGame(id) {
 }
 
 function showMenu() {
+  stopAutoplay();
   $('game').classList.add('hidden');
   $('menu').classList.remove('hidden');
   refreshSavedGames();
@@ -173,12 +184,18 @@ function showMenu() {
 // ---------------------------------------------------------------------------
 let canvas, ctx;
 function enterGame(state) {
+  stopAutoplay();
   G.state = state;
   G.gameId = state.id;
+  G.spectate = !!state.spectate;
   try { localStorage.setItem(LAST_GAME_KEY, state.id); } catch {}
   G.selUnit = null; G.selCity = null;
   $('menu').classList.add('hidden');
   $('game').classList.remove('hidden');
+  // Swap End Turn for watch controls in a spectator game.
+  $('btn-end').classList.toggle('hidden', G.spectate);
+  $('watch-controls').classList.toggle('hidden', !G.spectate);
+  $('hud-spectate').classList.toggle('hidden', !G.spectate);
   canvas = $('board');
   ctx = canvas.getContext('2d');
   resizeCanvas();
@@ -195,8 +212,9 @@ function enterGame(state) {
 function centerOnHumanStart() {
   const human = G.state.players.find((p) => p.isHuman);
   let fx = G.state.width / 2, fy = G.state.height / 2;
-  const u = G.state.units.find((x) => x.owner === human.id);
-  const c = G.state.cities.find((x) => x.owner === human.id);
+  // In a spectator game there's no human — just centre on any unit/city.
+  const u = human ? G.state.units.find((x) => x.owner === human.id) : G.state.units[0];
+  const c = human ? G.state.cities.find((x) => x.owner === human.id) : G.state.cities[0];
   const focus = c || u;
   if (focus) { fx = focus.x; fy = focus.y; }
   // Fit a few tiles on screen at a sensible default zoom for phones.
@@ -233,6 +251,8 @@ function bindGameControls() {
   ctx = canvas.getContext('2d');
 
   $('btn-end').addEventListener('click', endTurn);
+  $('btn-step').addEventListener('click', () => { stopAutoplay(); advance(); });
+  $('btn-play').addEventListener('click', togglePlay);
 
   // Unified pointer handling works for touch, pen and mouse:
   //   1 pointer  -> tap to select/act, drag to pan
@@ -267,7 +287,7 @@ function bindGameControls() {
   // Keyboard: space ends turn, Esc clears selection.
   window.addEventListener('keydown', (e) => {
     if ($('game').classList.contains('hidden')) return;
-    if (e.code === 'Space') { e.preventDefault(); endTurn(); }
+    if (e.code === 'Space') { e.preventDefault(); G.spectate ? togglePlay() : endTurn(); }
     if (e.code === 'Escape') { G.selUnit = null; G.selCity = null; renderSelection(); render(); }
   });
 }
@@ -371,6 +391,7 @@ function screenToTile(sx, sy) {
 // ---------------------------------------------------------------------------
 function isHumanTurn() {
   const human = G.state.players.find((p) => p.isHuman);
+  if (!human) return false; // spectator game
   return !G.state.gameOver && G.state.players[G.state.currentPlayer].id === human.id;
 }
 
@@ -378,6 +399,7 @@ async function onClickBoard(sx, sy) {
   const t = screenToTile(sx, sy);
   if (!t) return;
   const human = G.state.players.find((p) => p.isHuman);
+  const humanId = human ? human.id : null;
 
   const unitHere = G.state.units.find((u) => u.x === t.x && u.y === t.y);
   const cityHere = G.state.cities.find((c) => c.x === t.x && c.y === t.y);
@@ -390,7 +412,7 @@ async function onClickBoard(sx, sy) {
       const atk = hints.attacks.find((a) => a.x === t.x && a.y === t.y);
       if (atk) { await doAction({ type: 'attack', unitId: sel.id, x: t.x, y: t.y }); return; }
       const mv = hints.moves.find((m) => m.x === t.x && m.y === t.y);
-      if (mv && !(unitHere) && !(cityHere && cityHere.owner !== human.id)) {
+      if (mv && !(unitHere) && !(cityHere && cityHere.owner !== humanId)) {
         await doAction({ type: 'move', unitId: sel.id, x: t.x, y: t.y }); return;
       }
     }
@@ -408,8 +430,8 @@ async function onClickBoard(sx, sy) {
 
   // Otherwise: select what's under the cursor (prefer own unit, then city).
   G.selTile = null;
-  if (unitHere && unitHere.owner === human.id) { G.selUnit = unitHere.id; G.selCity = null; }
-  else if (cityHere && cityHere.owner === human.id) { G.selCity = cityHere.id; G.selUnit = null; }
+  if (unitHere && unitHere.owner === humanId) { G.selUnit = unitHere.id; G.selCity = null; }
+  else if (cityHere && cityHere.owner === humanId) { G.selCity = cityHere.id; G.selUnit = null; }
   else if (unitHere) { G.selUnit = unitHere.id; G.selCity = null; } // inspect enemy unit
   else if (cityHere) { G.selCity = cityHere.id; G.selUnit = null; }
   else { G.selUnit = null; G.selCity = null; G.selTile = t; } // inspect bare terrain
@@ -474,6 +496,40 @@ async function endTurn() {
   G.selUnit = null;
   setStatus('Rivals are scheming…');
   await doAction({ type: 'end_turn' });
+}
+
+// --- Spectator (watch) controls ---------------------------------------------
+let autoplayTimer = null;
+let advancing = false;
+
+// Advance the AI-only game by one civilization's turn.
+async function advance() {
+  if (!G.spectate || G.state.gameOver || advancing) return;
+  advancing = true;
+  const { ok, data } = await api.post(`/api/games/${G.gameId}/advance`, {});
+  advancing = false;
+  if (!ok) { toast(data.error || 'Could not advance'); stopAutoplay(); return; }
+  G.state = data.state;
+  if (G.selUnit && !G.state.units.find((u) => u.id === G.selUnit)) G.selUnit = null;
+  if (G.selCity && !G.state.cities.find((c) => c.id === G.selCity)) G.selCity = null;
+  updateHud(); renderLog(); renderSelection(); render(); maybeGameOver();
+}
+
+function togglePlay() {
+  if (autoplayTimer) { stopAutoplay(); return; }
+  $('btn-play').textContent = '⏸ Pause';
+  const tick = async () => {
+    if (!G.spectate || G.state.gameOver) { stopAutoplay(); return; }
+    await advance();
+    if (autoplayTimer) autoplayTimer = setTimeout(tick, 650);
+  };
+  autoplayTimer = setTimeout(tick, 0);
+}
+
+function stopAutoplay() {
+  if (autoplayTimer) { clearTimeout(autoplayTimer); autoplayTimer = null; }
+  const btn = document.getElementById('btn-play');
+  if (btn) btn.textContent = '▶ Play';
 }
 
 // ---------------------------------------------------------------------------
@@ -661,12 +717,31 @@ function hexA(hex, a) {
 // ---------------------------------------------------------------------------
 function updateHud() {
   const s = G.state;
-  const human = s.players.find((p) => p.isHuman);
   $('hud-turn').textContent = s.turn;
-  $('hud-gold').textContent = Math.floor(human.gold);
-  $('hud-gpt').textContent = `(+${human.goldPerTurn}/turn)`;
-  $('hud-cities').textContent = s.cities.filter((c) => c.owner === human.id).length;
-  $('btn-end').disabled = !isHumanTurn();
+  const human = s.players.find((p) => p.isHuman);
+  if (human) {
+    $('hud-gold').textContent = Math.floor(human.gold);
+    $('hud-gpt').textContent = `(+${human.goldPerTurn}/turn)`;
+    $('hud-cities').textContent = s.cities.filter((c) => c.owner === human.id).length;
+    $('btn-end').disabled = !isHumanTurn();
+  } else {
+    // Spectator: show the leading civ by city count instead of "your" gold.
+    const lead = leadingCiv(s);
+    $('hud-gold').textContent = lead ? lead.cities : 0;
+    $('hud-gpt').textContent = lead ? `cities · leader ${lead.name}` : '';
+    $('hud-cities').textContent = s.players.filter((p) => p.alive).length + ' civs';
+  }
+}
+
+// The living civilisation with the most cities (for the spectator HUD).
+function leadingCiv(s) {
+  let best = null;
+  for (const p of s.players) {
+    if (!p.alive) continue;
+    const cities = s.cities.filter((c) => c.owner === p.id).length;
+    if (!best || cities > best.cities) best = { name: p.name, cities, color: p.color };
+  }
+  return best;
 }
 
 function setStatus(msg) { $('hud-status').textContent = msg; }
@@ -675,6 +750,7 @@ function renderSelection() {
   const panel = $('selection-panel');
   const s = G.state;
   const human = s.players.find((p) => p.isHuman);
+  const humanId = human ? human.id : null;
   updateSheetHint();
 
   if (G.selUnit) {
@@ -682,9 +758,9 @@ function renderSelection() {
     if (!u) { panel.innerHTML = defaultHint(); return; }
     const ud = G.defs.UNITS[u.type];
     const owner = s.players.find((p) => p.id === u.owner);
-    const mine = u.owner === human.id;
+    const mine = u.owner === humanId;
     let html = `<div class="sel-title"><span class="ico">${ud.icon}</span> <span style="color:${owner.color}">${ud.name}</span></div>`;
-    html += `<div class="sel-sub">${owner.name}${mine ? '' : ' (enemy)'} · at (${u.x},${u.y})</div>`;
+    html += `<div class="sel-sub">${owner.name}${mine || s.spectate ? '' : ' (enemy)'} · at (${u.x},${u.y})</div>`;
     html += `<div class="statline">`;
     if (ud.strength) html += `<span class="stat">Str <b>${ud.strength}</b></span>`;
     html += `<span class="stat">Moves <b>${u.movesLeft}/${ud.moves}</b></span>`;
@@ -695,7 +771,7 @@ function renderSelection() {
 
     if (mine && isHumanTurn()) {
       html += `<div class="actions" id="unit-actions"></div>`;
-    } else if (!mine) {
+    } else if (!mine && !s.spectate) {
       html += `<p class="hint">An enemy unit. Move an adjacent military unit and attack to destroy it.</p>`;
     }
     panel.innerHTML = html;
@@ -707,7 +783,7 @@ function renderSelection() {
     const c = s.cities.find((x) => x.id === G.selCity);
     if (!c) { panel.innerHTML = defaultHint(); return; }
     const owner = s.players.find((p) => p.id === c.owner);
-    const mine = c.owner === human.id;
+    const mine = c.owner === humanId;
     let html = `<div class="sel-title"><span class="ico">★</span> <span style="color:${owner.color}">${c.name}</span></div>`;
     html += `<div class="sel-sub">${owner.name} · pop ${c.population} · +${c.goldPerTurn} gold/turn</div>`;
     html += `<div class="statline"><span class="stat">Defence <b>${s._cityDef[c.id]}</b></span><span class="stat">Growth <b>${c.growth}/6</b></span></div>`;
@@ -720,7 +796,7 @@ function renderSelection() {
         html += `<p class="hint">Borders grow toward rivals as the city grows. Tap a <b style="color:#ffe082">gold-dashed</b> tile to buy it for <b>⛁ ${buy.cost}</b>${afford ? '' : ' <span style="color:var(--danger)">(not enough gold)</span>'}.</p>`;
       }
       html += `<div class="section-h">Train units (gold ⛁ ${Math.floor(human.gold)})</div><div class="buy-grid" id="buy-grid"></div>`;
-    } else if (!mine) {
+    } else if (!mine && !s.spectate) {
       html += `<p class="hint">An enemy city. Bombard it to zero HP, then capture with an adjacent melee unit.</p>`;
     }
     panel.innerHTML = html;
@@ -881,12 +957,22 @@ function updateSheetHint() {
 
 function maybeGameOver() {
   if (!G.state.gameOver) return;
+  stopAutoplay();
   const human = G.state.players.find((p) => p.isHuman);
-  const won = G.state.winner === human.id;
-  $('go-title').textContent = won ? '🏆 Domination Victory!' : '💀 Defeat';
-  $('go-msg').textContent = won
-    ? 'Every rival city flies your banner. The world is yours.'
-    : 'Your last city has fallen. Your tribe is no more.';
+  const winner = G.state.players.find((p) => p.id === G.state.winner);
+  if (!human) {
+    // Spectator game — announce the winning civilisation.
+    $('go-title').textContent = winner ? '🏆 ' + winner.name + ' wins!' : 'Stalemate';
+    $('go-msg').textContent = winner
+      ? `${winner.name} achieved a Domination Victory after ${G.state.turn} turns.`
+      : 'The world lies in ruins with no victor.';
+  } else {
+    const won = G.state.winner === human.id;
+    $('go-title').textContent = won ? '🏆 Domination Victory!' : '💀 Defeat';
+    $('go-msg').textContent = won
+      ? 'Every rival city flies your banner. The world is yours.'
+      : 'Your last city has fallen. Your tribe is no more.';
+  }
   $('gameover').classList.remove('hidden');
 }
 

@@ -4,7 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import {
   createGame, applyAction, reachableTiles, attackTargets, reseedIdCounter,
-  cityDefenseStrength, cityFrontierTiles, tileBuyCost,
+  cityDefenseStrength, cityFrontierTiles, tileBuyCost, stepSpectator,
 } from './game/engine.js';
 import { UNITS, IMPROVEMENTS, TERRAIN, RESOURCES } from './game/defs.js';
 import {
@@ -69,12 +69,13 @@ app.get('/api/games', async (req, res) => {
 
 app.post('/api/games', async (req, res) => {
   try {
-    const { name, width, height, aiPlayers } = req.body || {};
+    const { name, width, height, aiPlayers, spectate } = req.body || {};
     const state = createGame({
       name: (name || 'New Game').slice(0, 60),
       width: clamp(width, 12, 30, 18),
       height: clamp(height, 8, 20, 12),
       aiPlayers: clamp(aiPlayers, 1, 5, 1),
+      spectate: !!spectate,
     });
     await saveGame(state);
     res.json({ state: withHints(state) });
@@ -102,11 +103,25 @@ app.post('/api/games/:id/action', async (req, res) => {
     if (!state) return res.status(404).json({ error: 'Game not found.' });
     reseedIdCounter(state);
     const human = HUMAN(state);
+    if (!human) return res.status(400).json({ error: 'This is a spectator game — use Play/Step to advance.' });
     const result = applyAction(state, human.id, req.body || {});
     if (!result.ok) {
       // Still return current state so the client can resync, with the error.
       return res.status(400).json({ error: result.error, state: withHints(state) });
     }
+    await saveGame(state);
+    res.json({ state: withHints(state) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Advance an AI-only (spectator) game by one civilization's turn.
+app.post('/api/games/:id/advance', async (req, res) => {
+  try {
+    const state = await loadGame(req.params.id);
+    if (!state) return res.status(404).json({ error: 'Game not found.' });
+    if (!state.spectate) return res.status(400).json({ error: 'Not a spectator game.' });
+    reseedIdCounter(state);
+    stepSpectator(state);
     await saveGame(state);
     res.json({ state: withHints(state) });
   } catch (e) { res.status(500).json({ error: e.message }); }
