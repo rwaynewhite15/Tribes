@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createGame, applyAction, reachableTiles, reseedIdCounter, tileAt,
-  hexNeighbors, hexDistance, cityFrontierTiles, tileBuyCost,
+  hexNeighbors, hexDistance, cityFrontierTiles, tileBuyCost, stepSpectator,
 } from '../server/game/engine.js';
 
 function humanId(state) { return state.players.find((p) => p.isHuman).id; }
@@ -132,6 +132,21 @@ test('a player can purchase a bordering tile to expand a city', () => {
   const far = s.tiles.find((t) => !t.ownerCity && hexDistance(city.x, city.y, t.x, t.y) > 4);
   const bad = applyAction(s, hid, { type: 'buy_tile', cityId: city.id, x: far.x, y: far.y });
   assert.equal(bad.ok, false, 'non-bordering tile rejected');
+});
+
+test('spectator (AI-only) game has no human and can be stepped to a result', () => {
+  const s = createGame({ width: 16, height: 10, aiPlayers: 3, seed: 17, spectate: true });
+  assert.equal(s.spectate, true);
+  assert.equal(s.players.length, 3, 'three AI civs');
+  assert.ok(s.players.every((p) => !p.isHuman), 'no human player');
+
+  // Step many turns; the AIs should run without errors and the game progresses.
+  const startTurn = s.turn;
+  for (let i = 0; i < 400 && !s.gameOver; i++) stepSpectator(s);
+  assert.ok(s.turn > startTurn, 'turns advanced');
+  // Either someone won, or it is still a valid ongoing game with living civs.
+  const alive = s.players.filter((p) => p.alive).length;
+  assert.ok(s.gameOver ? alive <= 1 : alive >= 1, 'consistent end state');
 });
 
 test('cannot found two cities too close together', () => {

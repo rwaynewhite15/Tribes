@@ -77,19 +77,22 @@ export function playerById(state, id) {
 }
 
 // --- Game creation -----------------------------------------------------------
-export function createGame({ name = 'New Game', width = 18, height = 12, aiPlayers = 1, seed } = {}) {
+export function createGame({ name = 'New Game', width = 18, height = 12, aiPlayers = 1, seed, spectate = false } = {}) {
   _idCounter = 1;
   const actualSeed = seed ?? Math.floor(Math.random() * 1e9);
   const tiles = generateMap(width, height, actualSeed);
 
   const colors = ['#1565c0', '#c62828', '#2e7d32', '#6a1b9a', '#ef6c00', '#00838f'];
-  const playerCount = 1 + aiPlayers;
+  // Spectate = AI-only: no human, every player is an AI civ (at least two).
+  const aiCount = spectate ? Math.max(2, aiPlayers) : aiPlayers;
+  const playerCount = (spectate ? 0 : 1) + aiCount;
   const players = [];
   for (let p = 0; p < playerCount; p++) {
+    const isHuman = !spectate && p === 0;
     players.push({
       id: nextId('p'),
-      name: p === 0 ? 'You' : `Rival ${p}`,
-      isHuman: p === 0,
+      name: spectate ? `Civ ${p + 1}` : (p === 0 ? 'You' : `Rival ${p}`),
+      isHuman,
       gold: STARTING_GOLD,
       goldPerTurn: 0,
       color: colors[p % colors.length],
@@ -101,6 +104,7 @@ export function createGame({ name = 'New Game', width = 18, height = 12, aiPlaye
     id: null,
     name,
     seed: actualSeed,
+    spectate,
     width,
     height,
     turn: 1,
@@ -129,7 +133,9 @@ export function createGame({ name = 'New Game', width = 18, height = 12, aiPlaye
   }
 
   recomputeEconomy(state);
-  pushLog(state, `Turn 1 — ${players[0].name} begins. Settle a city to start your empire.`);
+  pushLog(state, spectate
+    ? `Turn 1 — ${players.length} AI civilizations begin. Press Play to watch.`
+    : `Turn 1 — ${players[0].name} begins. Settle a city to start your empire.`);
   return state;
 }
 
@@ -720,6 +726,23 @@ function advanceToNextPlayer(state) {
     checkVictory(state);
     aiGuard += 1;
   }
+}
+
+// Advance an AI-only (spectate) game by a single player's turn.
+export function stepSpectator(state) {
+  if (state.gameOver) return { ok: false, error: 'The game is over.' };
+  const ai = state.players[state.currentPlayer];
+  runAiTurn(state, ai);
+  collectIncome(state, ai);
+  let guard = 0;
+  do {
+    state.currentPlayer = (state.currentPlayer + 1) % state.players.length;
+    if (state.currentPlayer === 0) state.turn += 1;
+    guard += 1;
+  } while (!state.players[state.currentPlayer].alive && guard < state.players.length * 2);
+  startTurnFor(state, state.players[state.currentPlayer]);
+  checkVictory(state);
+  return { ok: true };
 }
 
 // --- AI ----------------------------------------------------------------------
