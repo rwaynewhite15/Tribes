@@ -1,0 +1,20 @@
+# Render Blueprint for Tribes.
+# Deploy by pushing this repo to GitHub and creating a new Blueprint on Render,
+# or via the "New Web Service" flow using the build/start commands below.
+services:
+  - type: web
+    name: tribes
+    runtime: node
+    plan: free
+    # Render sets PORT automatically; the server reads process.env.PORT.
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/games
+    autoDeploy: true
+    envVars:
+      # Optional: paste your Neon connection string in the Render dashboard to
+      # persist saved games to Postgres. Leave unset to use ephemeral file saves.
+      - key: DATABASE_URL
+        sync: false
+      - key: NODE_ENV
+        value: production
