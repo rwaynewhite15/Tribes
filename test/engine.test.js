@@ -53,6 +53,34 @@ test('settler can found a city and economy updates', () => {
   assert.equal(s.units.find((u) => u.id === settler.id), undefined);
 });
 
+test('builders can only improve tiles inside their own territory', () => {
+  const s = createGame({ width: 16, height: 10, aiPlayers: 1, seed: 7 });
+  const hid = humanId(s);
+  // Found a city so the player owns some tiles.
+  const settler = s.units.find((u) => u.owner === hid && u.type === 'settler');
+  applyAction(s, hid, { type: 'found_city', unitId: settler.id });
+  const city = s.cities[0];
+
+  // Find an owned, improvable, empty tile adjacent to the city; force it to
+  // hills (always improvable) and drop a builder on it.
+  const owned = s.tiles.find((t) => t.ownerCity === city.id && !(t.x === city.x && t.y === city.y));
+  owned.terrain = 'hills'; owned.improvement = null; owned.resource = null;
+  const builder = { id: 'ub1', owner: hid, type: 'builder', x: owned.x, y: owned.y, hp: 20, maxHp: 20, movesLeft: 2, fortified: false, charges: 3 };
+  s.units.push(builder);
+  const okRes = applyAction(s, hid, { type: 'build', unitId: builder.id, improvement: 'mine' });
+  assert.ok(okRes.ok, okRes.error);
+  assert.equal(owned.improvement, 'mine', 'mine built on owned tile');
+
+  // Now an unowned hills tile far away should be rejected.
+  const far = s.tiles.find((t) => !t.ownerCity && t.x > city.x + 2);
+  far.terrain = 'hills'; far.improvement = null; far.resource = null;
+  const builder2 = { id: 'ub2', owner: hid, type: 'builder', x: far.x, y: far.y, hp: 20, maxHp: 20, movesLeft: 2, fortified: false, charges: 3 };
+  s.units.push(builder2);
+  const badRes = applyAction(s, hid, { type: 'build', unitId: builder2.id, improvement: 'mine' });
+  assert.equal(badRes.ok, false, 'building outside territory is rejected');
+  assert.equal(far.improvement, null, 'no improvement placed off-territory');
+});
+
 test('cannot found two cities too close together', () => {
   const s = createGame({ width: 16, height: 10, aiPlayers: 1, seed: 11 });
   const hid = humanId(s);

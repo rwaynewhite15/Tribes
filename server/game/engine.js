@@ -486,6 +486,12 @@ function doBuild(state, player, { unitId, improvement }) {
   if (TERRAIN[tile.terrain].canImprove !== improvement) {
     return { ok: false, error: `Cannot build a ${def.name} on ${TERRAIN[tile.terrain].name}.` };
   }
+  // Improvements only earn gold when a city works the tile, so restrict building
+  // to tiles inside your own borders — otherwise the work would be wasted.
+  const ownerCity = tile.ownerCity ? state.cities.find((c) => c.id === tile.ownerCity) : null;
+  if (!ownerCity || ownerCity.owner !== player.id) {
+    return { ok: false, error: 'You can only build inside your own territory. Move the builder onto a tile your city works.' };
+  }
   if (tile.improvement) return { ok: false, error: 'Tile already improved.' };
   tile.improvement = improvement;
   unit.movesLeft = 0;
@@ -678,7 +684,8 @@ function aiBuilder(state, ai, builder) {
   const tile = tileAt(state, builder.x, builder.y);
   const canImp = TERRAIN[tile.terrain].canImprove;
   if (tile.resource) { applyDirect(state, ai, { type: 'harvest', unitId: builder.id }); return; }
-  if (canImp && !tile.improvement && tile.ownerCity) {
+  const ownTile = tile.ownerCity && state.cities.some((c) => c.id === tile.ownerCity && c.owner === ai.id);
+  if (canImp && !tile.improvement && ownTile) {
     applyDirect(state, ai, { type: 'build', unitId: builder.id, improvement: canImp });
     return;
   }

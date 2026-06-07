@@ -741,8 +741,11 @@ function hpBarHtml(hp, max, color = '#4caf50') {
 function buildUnitActions(u) {
   const box = $('unit-actions');
   const s = G.state;
+  const human = s.players.find((p) => p.isHuman);
   const tile = s.tiles[u.y * s.width + u.x];
+  const ownedByMe = !!tile.ownerCity && s.cities.some((c) => c.id === tile.ownerCity && c.owner === human.id);
   const btns = [];
+  const notes = [];
 
   if (u.type === 'settler') {
     btns.push(actBtn('⚑ Found City', () => doAction({ type: 'found_city', unitId: u.id })));
@@ -751,7 +754,11 @@ function buildUnitActions(u) {
     const canImp = G.defs.TERRAIN[tile.terrain].canImprove;
     if (canImp && !tile.improvement && u.movesLeft > 0) {
       const imp = G.defs.IMPROVEMENTS[canImp];
-      btns.push(actBtn(`${imp.icon} Build ${imp.name}`, () => doAction({ type: 'build', unitId: u.id, improvement: canImp })));
+      if (ownedByMe) {
+        btns.push(actBtn(`${imp.icon} Build ${imp.name}`, () => doAction({ type: 'build', unitId: u.id, improvement: canImp })));
+      } else {
+        notes.push(`A ${imp.name} only earns gold on your own land — move the builder onto a tile one of your cities works.`);
+      }
     }
     if (tile.resource && u.movesLeft > 0) {
       btns.push(actBtn(`✦ Harvest ${G.defs.RESOURCES[tile.resource].name}`, () => doAction({ type: 'harvest', unitId: u.id })));
@@ -762,11 +769,17 @@ function buildUnitActions(u) {
   }
   if (u.movesLeft > 0) btns.push(actBtn('Skip', () => doAction({ type: 'skip', unitId: u.id })));
 
-  if (!btns.length) {
-    box.innerHTML = '<p class="hint">No actions available — unit is spent for this turn.</p>';
-    return;
-  }
+  box.innerHTML = '';
   btns.forEach((b) => box.appendChild(b));
+  if (!btns.length && !notes.length) {
+    box.innerHTML = '<p class="hint">No actions available — unit is spent for this turn.</p>';
+  }
+  for (const n of notes) {
+    const p = document.createElement('p');
+    p.className = 'hint';
+    p.textContent = n;
+    box.appendChild(p);
+  }
 }
 
 function actBtn(label, fn) {
