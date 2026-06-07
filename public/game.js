@@ -396,6 +396,16 @@ async function onClickBoard(sx, sy) {
     }
   }
 
+  // If one of our cities is selected and the tile is a purchasable border tile,
+  // buy it.
+  if (G.selCity && isHumanTurn()) {
+    const buy = G.state._cityBuy && G.state._cityBuy[G.selCity];
+    if (buy && buy.tiles.some((p) => p.x === t.x && p.y === t.y)) {
+      await doAction({ type: 'buy_tile', cityId: G.selCity, x: t.x, y: t.y });
+      return;
+    }
+  }
+
   // Otherwise: select what's under the cursor (prefer own unit, then city).
   G.selTile = null;
   if (unitHere && unitHere.owner === human.id) { G.selUnit = unitHere.id; G.selCity = null; }
@@ -484,6 +494,8 @@ function render() {
   const hints = sel ? s._hints[sel.id] : null;
   const moveSet = new Set(hints ? hints.moves.map((m) => m.x + ',' + m.y) : []);
   const atkSet = new Set(hints ? hints.attacks.map((m) => m.x + ',' + m.y) : []);
+  const buy = (G.selCity && s._cityBuy) ? s._cityBuy[G.selCity] : null;
+  const buySet = new Set(buy ? buy.tiles.map((p) => p.x + ',' + p.y) : []);
 
   // Visible world rect (+margin) so we only draw hexes that are on screen.
   const vx0 = G.cam.x - HEX_W, vy0 = G.cam.y - HEX_H;
@@ -511,10 +523,17 @@ function render() {
         }
       }
 
-      // move / attack highlights
+      // move / attack / buy highlights
       const key = x + ',' + y;
       if (atkSet.has(key)) { ctx.fillStyle = 'rgba(224,82,82,0.42)'; ctx.fill(); }
       else if (moveSet.has(key)) { ctx.fillStyle = 'rgba(79,157,222,0.30)'; ctx.fill(); }
+      else if (buySet.has(key)) {
+        ctx.fillStyle = 'rgba(240,180,40,0.22)'; ctx.fill();
+        hexPath(c.x, c.y, HEX_S - 3);
+        ctx.setLineDash([5, 4]); ctx.strokeStyle = 'rgba(240,196,80,0.95)'; ctx.lineWidth = 2; ctx.stroke();
+        ctx.setLineDash([]);
+        drawGlyph('⛁' + buy.cost, c.x, c.y + HEX_S * 0.12, 13, '#ffe082', 'center');
+      }
 
       // resource / improvement glyphs
       if (tile.resource) {
@@ -534,6 +553,43 @@ function render() {
       }
     }
   }
+
+  // Territory borders: draw a coloured edge wherever a civ's land meets a tile
+  // that isn't part of the same civ. The border is inset slightly so each
+  // civ's outline stays within its own hexes (no colour clash on shared edges).
+  const tileOwnerId = (t) => {
+    if (!t || !t.ownerCity) return null;
+    const city = s.cities.find((cc) => cc.id === t.ownerCity);
+    return city ? city.owner : null;
+  };
+  const rIn = HEX_S - 2;
+  ctx.lineCap = 'round';
+  ctx.lineWidth = 3;
+  for (let y = 0; y < s.height; y++) {
+    for (let x = 0; x < s.width; x++) {
+      const tile = s.tiles[y * s.width + x];
+      const ownerId = tileOwnerId(tile);
+      if (!ownerId) continue;
+      const c = hexCenter(x, y);
+      if (c.x < vx0 || c.x > vx1 || c.y < vy0 || c.y > vy1) continue; // cull
+      const owner = s.players.find((p) => p.id === ownerId);
+      for (let i = 0; i < 6; i++) {
+        // Neighbour across edge i sits at the edge's outward normal (60i-60°).
+        const midA = Math.PI / 180 * (60 * i - 60);
+        const nt = worldToTile(c.x + HEX_W * Math.cos(midA), c.y + HEX_W * Math.sin(midA));
+        const nOwner = nt ? tileOwnerId(s.tiles[nt.y * s.width + nt.x]) : null;
+        if (nOwner === ownerId) continue; // interior edge — skip
+        const a0 = Math.PI / 180 * (60 * i - 90);
+        const a1 = Math.PI / 180 * (60 * (i + 1) - 90);
+        ctx.beginPath();
+        ctx.moveTo(c.x + rIn * Math.cos(a0), c.y + rIn * Math.sin(a0));
+        ctx.lineTo(c.x + rIn * Math.cos(a1), c.y + rIn * Math.sin(a1));
+        ctx.strokeStyle = owner.color;
+        ctx.stroke();
+      }
+    }
+  }
+  ctx.lineCap = 'butt';
 
   // Cities
   for (const c of s.cities) {
@@ -657,6 +713,12 @@ function renderSelection() {
     html += `<div class="statline"><span class="stat">Defence <b>${s._cityDef[c.id]}</b></span><span class="stat">Growth <b>${c.growth}/6</b></span></div>`;
     html += hpBarHtml(c.hp, c.maxHp, '#e0c050');
     if (mine && isHumanTurn()) {
+      const buy = s._cityBuy && s._cityBuy[c.id];
+      if (buy && buy.tiles.length) {
+        const afford = human.gold >= buy.cost;
+        html += `<div class="section-h">Territory</div>`;
+        html += `<p class="hint">Borders grow toward rivals as the city grows. Tap a <b style="color:#ffe082">gold-dashed</b> tile to buy it for <b>⛁ ${buy.cost}</b>${afford ? '' : ' <span style="color:var(--danger)">(not enough gold)</span>'}.</p>`;
+      }
       html += `<div class="section-h">Train units (gold ⛁ ${Math.floor(human.gold)})</div><div class="buy-grid" id="buy-grid"></div>`;
     } else if (!mine) {
       html += `<p class="hint">An enemy city. Bombard it to zero HP, then capture with an adjacent melee unit.</p>`;
@@ -704,8 +766,11 @@ function hpBarHtml(hp, max, color = '#4caf50') {
 function buildUnitActions(u) {
   const box = $('unit-actions');
   const s = G.state;
+  const human = s.players.find((p) => p.isHuman);
   const tile = s.tiles[u.y * s.width + u.x];
+  const ownedByMe = !!tile.ownerCity && s.cities.some((c) => c.id === tile.ownerCity && c.owner === human.id);
   const btns = [];
+  const notes = [];
 
   if (u.type === 'settler') {
     btns.push(actBtn('⚑ Found City', () => doAction({ type: 'found_city', unitId: u.id })));
@@ -714,7 +779,12 @@ function buildUnitActions(u) {
     const canImp = G.defs.TERRAIN[tile.terrain].canImprove;
     if (canImp && !tile.improvement && u.movesLeft > 0) {
       const imp = G.defs.IMPROVEMENTS[canImp];
-      btns.push(actBtn(`${imp.icon} Build ${imp.name}`, () => doAction({ type: 'build', unitId: u.id, improvement: canImp })));
+      if (ownedByMe) {
+        btns.push(actBtn(`${imp.icon} Build ${imp.name}`, () => doAction({ type: 'build', unitId: u.id, improvement: canImp })));
+        notes.push('Completing it adds a citizen and expands the city border.');
+      } else {
+        notes.push(`A ${imp.name} only earns gold on your own land — move the builder onto a tile one of your cities works.`);
+      }
     }
     if (tile.resource && u.movesLeft > 0) {
       btns.push(actBtn(`✦ Harvest ${G.defs.RESOURCES[tile.resource].name}`, () => doAction({ type: 'harvest', unitId: u.id })));
@@ -725,11 +795,17 @@ function buildUnitActions(u) {
   }
   if (u.movesLeft > 0) btns.push(actBtn('Skip', () => doAction({ type: 'skip', unitId: u.id })));
 
-  if (!btns.length) {
-    box.innerHTML = '<p class="hint">No actions available — unit is spent for this turn.</p>';
-    return;
-  }
+  box.innerHTML = '';
   btns.forEach((b) => box.appendChild(b));
+  if (!btns.length && !notes.length) {
+    box.innerHTML = '<p class="hint">No actions available — unit is spent for this turn.</p>';
+  }
+  for (const n of notes) {
+    const p = document.createElement('p');
+    p.className = 'hint';
+    p.textContent = n;
+    box.appendChild(p);
+  }
 }
 
 function actBtn(label, fn) {

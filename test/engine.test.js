@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createGame, applyAction, reachableTiles, reseedIdCounter, tileAt,
-  hexNeighbors, hexDistance,
+  hexNeighbors, hexDistance, cityFrontierTiles, tileBuyCost,
 } from '../server/game/engine.js';
 
 function humanId(state) { return state.players.find((p) => p.isHuman).id; }
@@ -51,6 +51,87 @@ test('settler can found a city and economy updates', () => {
   assert.ok(city.goldPerTurn >= 2, 'city earns gold');
   // Settler consumed.
   assert.equal(s.units.find((u) => u.id === settler.id), undefined);
+});
+
+test('builders can only improve tiles inside their own territory', () => {
+  const s = createGame({ width: 16, height: 10, aiPlayers: 1, seed: 7 });
+  const hid = humanId(s);
+  // Found a city so the player owns some tiles.
+  const settler = s.units.find((u) => u.owner === hid && u.type === 'settler');
+  applyAction(s, hid, { type: 'found_city', unitId: settler.id });
+  const city = s.cities[0];
+
+  // Find an owned, improvable, empty tile adjacent to the city; force it to
+  // hills (always improvable) and drop a builder on it.
+  const owned = s.tiles.find((t) => t.ownerCity === city.id && !(t.x === city.x && t.y === city.y));
+  owned.terrain = 'hills'; owned.improvement = null; owned.resource = null;
+  const builder = { id: 'ub1', owner: hid, type: 'builder', x: owned.x, y: owned.y, hp: 20, maxHp: 20, movesLeft: 2, fortified: false, charges: 3 };
+  s.units.push(builder);
+  const okRes = applyAction(s, hid, { type: 'build', unitId: builder.id, improvement: 'mine' });
+  assert.ok(okRes.ok, okRes.error);
+  assert.equal(owned.improvement, 'mine', 'mine built on owned tile');
+
+  // Now an unowned hills tile far away should be rejected.
+  const far = s.tiles.find((t) => !t.ownerCity && t.x > city.x + 2);
+  far.terrain = 'hills'; far.improvement = null; far.resource = null;
+  const builder2 = { id: 'ub2', owner: hid, type: 'builder', x: far.x, y: far.y, hp: 20, maxHp: 20, movesLeft: 2, fortified: false, charges: 3 };
+  s.units.push(builder2);
+  const badRes = applyAction(s, hid, { type: 'build', unitId: builder2.id, improvement: 'mine' });
+  assert.equal(badRes.ok, false, 'building outside territory is rejected');
+  assert.equal(far.improvement, null, 'no improvement placed off-territory');
+});
+
+test('building an improvement adds a citizen and a new owned tile', () => {
+  const s = createGame({ width: 18, height: 12, aiPlayers: 1, seed: 7 });
+  const hid = humanId(s);
+  const settler = s.units.find((u) => u.owner === hid && u.type === 'settler');
+  applyAction(s, hid, { type: 'found_city', unitId: settler.id });
+  const city = s.cities[0];
+
+  const owned = s.tiles.find((t) => t.ownerCity === city.id && !(t.x === city.x && t.y === city.y));
+  owned.terrain = 'hills'; owned.improvement = null; owned.resource = null;
+  const builder = { id: 'ub1', owner: hid, type: 'builder', x: owned.x, y: owned.y, hp: 20, maxHp: 20, movesLeft: 2, fortified: false, charges: 3 };
+  s.units.push(builder);
+
+  const popBefore = city.population;
+  const ownedBefore = s.tiles.filter((t) => t.ownerCity === city.id).length;
+  const res = applyAction(s, hid, { type: 'build', unitId: builder.id, improvement: 'mine' });
+  assert.ok(res.ok, res.error);
+  assert.equal(city.population, popBefore + 1, 'improvement adds a citizen');
+  assert.equal(s.tiles.filter((t) => t.ownerCity === city.id).length, ownedBefore + 1, 'improvement expands territory by one tile');
+});
+
+test('a player can purchase a bordering tile to expand a city', () => {
+  const s = createGame({ width: 18, height: 12, aiPlayers: 1, seed: 7 });
+  const hid = humanId(s);
+  const settler = s.units.find((u) => u.owner === hid && u.type === 'settler');
+  applyAction(s, hid, { type: 'found_city', unitId: settler.id });
+  const city = s.cities[0];
+  const player = s.players.find((p) => p.id === hid);
+  player.gold = 500;
+
+  const frontier = cityFrontierTiles(s, city);
+  assert.ok(frontier.length > 0, 'city has frontier tiles to buy');
+  const target = frontier[0];
+  // Make it a grassland farm-yielding tile so the economy clearly increases.
+  target.terrain = 'grassland'; target.improvement = null; target.resource = null;
+  const cost = tileBuyCost(city);
+  const goldBefore = player.gold;
+  const gptBefore = city.goldPerTurn;
+
+  const res = applyAction(s, hid, { type: 'buy_tile', cityId: city.id, x: target.x, y: target.y });
+  assert.ok(res.ok, res.error);
+  assert.equal(target.ownerCity, city.id, 'tile now owned by the city');
+  assert.equal(player.gold, goldBefore - cost, 'gold deducted by cost');
+  assert.equal(city.tilesPurchased, 1, 'purchase counter incremented');
+  assert.ok(city.goldPerTurn > gptBefore, 'owning the new tile raises income');
+  // Next tile costs more.
+  assert.ok(tileBuyCost(city) > cost, 'each purchase raises the price');
+
+  // Cannot buy a far-off non-bordering tile.
+  const far = s.tiles.find((t) => !t.ownerCity && hexDistance(city.x, city.y, t.x, t.y) > 4);
+  const bad = applyAction(s, hid, { type: 'buy_tile', cityId: city.id, x: far.x, y: far.y });
+  assert.equal(bad.ok, false, 'non-bordering tile rejected');
 });
 
 test('cannot found two cities too close together', () => {
