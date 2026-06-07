@@ -28,7 +28,43 @@ export function reseedIdCounter(state) {
 export const idx = (state, x, y) => y * state.width + x;
 export const inBounds = (state, x, y) => x >= 0 && y >= 0 && x < state.width && y < state.height;
 export const tileAt = (state, x, y) => (inBounds(state, x, y) ? state.tiles[idx(state, x, y)] : null);
-export const cheby = (ax, ay, bx, by) => Math.max(Math.abs(ax - bx), Math.abs(ay - by));
+
+// --- Hex grid geometry -------------------------------------------------------
+// Tiles are stored in a rectangular array but laid out as pointy-top hexagons
+// using "odd-r" offset coordinates: odd rows are shifted half a hex to the
+// right. Neighbour deltas therefore depend on the row's parity.
+const HEX_DIRS = [
+  // even rows (y & 1 === 0)
+  [[+1, 0], [-1, 0], [0, -1], [-1, -1], [0, +1], [-1, +1]],
+  // odd rows  (y & 1 === 1)
+  [[+1, 0], [-1, 0], [0, -1], [+1, -1], [0, +1], [+1, +1]],
+];
+
+// The six neighbouring (x,y) coordinates of a hex (may be out of bounds).
+export function hexNeighbors(x, y) {
+  return HEX_DIRS[y & 1].map(([dx, dy]) => [x + dx, y + dy]);
+}
+
+// Offset -> axial conversion, then cube distance between two hexes.
+function toAxial(x, y) { return { q: x - ((y - (y & 1)) / 2), r: y }; }
+export function hexDistance(ax, ay, bx, by) {
+  const a = toAxial(ax, ay), b = toAxial(bx, by);
+  return (Math.abs(a.q - b.q) + Math.abs(a.r - b.r) + Math.abs((a.q + a.r) - (b.q + b.r))) / 2;
+}
+
+// All in-bounds tiles within hex distance R of (cx,cy), including the centre.
+function tilesWithin(state, cx, cy, R) {
+  const out = [];
+  for (let dy = -R; dy <= R; dy++) {
+    for (let dx = -R - 1; dx <= R + 1; dx++) {
+      const x = cx + dx, y = cy + dy;
+      if (!inBounds(state, x, y)) continue;
+      if (hexDistance(cx, cy, x, y) > R) continue;
+      out.push(tileAt(state, x, y));
+    }
+  }
+  return out;
+}
 
 export function unitAt(state, x, y) {
   return state.units.find((u) => u.x === x && u.y === y) || null;
@@ -39,12 +75,6 @@ export function cityAt(state, x, y) {
 export function playerById(state, id) {
   return state.players.find((p) => p.id === id) || null;
 }
-
-// 8-directional neighbours.
-const DIRS = [
-  [1, 0], [-1, 0], [0, 1], [0, -1],
-  [1, 1], [1, -1], [-1, 1], [-1, -1],
-];
 
 // --- Game creation -----------------------------------------------------------
 export function createGame({ name = 'New Game', width = 18, height = 12, aiPlayers = 1, seed } = {}) {
@@ -122,8 +152,7 @@ function spawnUnit(state, owner, type, x, y) {
 }
 
 function freeAdjacent(state, x, y) {
-  for (const [dx, dy] of DIRS) {
-    const nx = x + dx, ny = y + dy;
+  for (const [nx, ny] of hexNeighbors(x, y)) {
     if (!inBounds(state, nx, ny)) continue;
     const t = tileAt(state, nx, ny);
     if (!TERRAIN[t.terrain].passable) continue;
@@ -145,14 +174,10 @@ export function recomputeEconomy(state) {
   for (const p of state.players) p.goldPerTurn = 0;
   for (const c of state.cities) {
     let gold = CITY.baseGold;
-    for (let dy = -CITY.workRadius; dy <= CITY.workRadius; dy++) {
-      for (let dx = -CITY.workRadius; dx <= CITY.workRadius; dx++) {
-        const t = tileAt(state, c.x + dx, c.y + dy);
-        if (!t) continue;
-        if (t.ownerCity && t.ownerCity !== c.id) continue;
-        if (dx === 0 && dy === 0) continue; // centre handled by baseGold
-        gold += tileGold(t);
-      }
+    for (const t of tilesWithin(state, c.x, c.y, CITY.workRadius)) {
+      if (t.x === c.x && t.y === c.y) continue; // centre handled by baseGold
+      if (t.ownerCity && t.ownerCity !== c.id) continue;
+      gold += tileGold(t);
     }
     c.goldPerTurn = gold;
     const owner = playerById(state, c.owner);
@@ -181,8 +206,7 @@ export function reachableTiles(state, unit) {
   while (frontier.length) {
     frontier.sort((a, b) => a.cost - b.cost);
     const cur = frontier.shift();
-    for (const [dx, dy] of DIRS) {
-      const nx = cur.x + dx, ny = cur.y + dy;
+    for (const [nx, ny] of hexNeighbors(cur.x, cur.y)) {
       if (!inBounds(state, nx, ny)) continue;
       const t = tileAt(state, nx, ny);
       if (!TERRAIN[t.terrain].passable) continue;
@@ -210,11 +234,11 @@ export function attackTargets(state, unit) {
   const range = def.range;
   const targets = [];
   for (let dy = -range; dy <= range; dy++) {
-    for (let dx = -range; dx <= range; dx++) {
+    for (let dx = -range - 1; dx <= range + 1; dx++) {
       if (dx === 0 && dy === 0) continue;
-      if (cheby(0, 0, dx, dy) > range) continue;
       const tx = unit.x + dx, ty = unit.y + dy;
       if (!inBounds(state, tx, ty)) continue;
+      if (hexDistance(unit.x, unit.y, tx, ty) > range) continue;
       const eu = unitAt(state, tx, ty);
       const ec = cityAt(state, tx, ty);
       if (eu && eu.owner !== unit.owner) targets.push({ x: tx, y: ty, kind: 'unit', id: eu.id });
@@ -406,7 +430,7 @@ function doFoundCity(state, player, { unitId }) {
   if (!TERRAIN[tile.terrain].passable) return { ok: false, error: 'Cannot settle here.' };
   if (cityAt(state, unit.x, unit.y)) return { ok: false, error: 'A city already stands here.' };
   for (const c of state.cities) {
-    if (cheby(c.x, c.y, unit.x, unit.y) < CITY.minDistanceBetweenCities) {
+    if (hexDistance(c.x, c.y, unit.x, unit.y) < CITY.minDistanceBetweenCities) {
       return { ok: false, error: 'Too close to another city.' };
     }
   }
@@ -432,11 +456,8 @@ function doFoundCity(state, player, { unitId }) {
 }
 
 function claimTiles(state, city) {
-  for (let dy = -CITY.workRadius; dy <= CITY.workRadius; dy++) {
-    for (let dx = -CITY.workRadius; dx <= CITY.workRadius; dx++) {
-      const t = tileAt(state, city.x + dx, city.y + dy);
-      if (t && !t.ownerCity) t.ownerCity = city.id;
-    }
+  for (const t of tilesWithin(state, city.x, city.y, CITY.workRadius)) {
+    if (!t.ownerCity) t.ownerCity = city.id;
   }
   const c = tileAt(state, city.x, city.y);
   if (c) c.ownerCity = city.id;
@@ -634,7 +655,7 @@ function aiMoveToSettle(state, ai, settler) {
     const [x, y] = key.split(',').map(Number);
     let score = TERRAIN[tileAt(state, x, y).terrain].gold;
     let minCity = Infinity;
-    for (const c of state.cities) minCity = Math.min(minCity, cheby(c.x, c.y, x, y));
+    for (const c of state.cities) minCity = Math.min(minCity, hexDistance(c.x, c.y, x, y));
     if (minCity < CITY.minDistanceBetweenCities) score -= 5;
     else score += Math.min(minCity, 4);
     if (score > bestScore) { bestScore = score; best = { x, y }; }
@@ -649,7 +670,7 @@ function canSettleHere(state, x, y) {
   const tile = tileAt(state, x, y);
   if (!tile || !TERRAIN[tile.terrain].passable) return false;
   if (cityAt(state, x, y)) return false;
-  for (const c of state.cities) if (cheby(c.x, c.y, x, y) < CITY.minDistanceBetweenCities) return false;
+  for (const c of state.cities) if (hexDistance(c.x, c.y, x, y) < CITY.minDistanceBetweenCities) return false;
   return true;
 }
 
@@ -692,7 +713,7 @@ function aiMilitary(state, ai, unit) {
   let best = null, bestDist = Infinity;
   for (const key of reach.keys()) {
     const [x, y] = key.split(',').map(Number);
-    const d = cheby(x, y, goal.x, goal.y);
+    const d = hexDistance(x, y, goal.x, goal.y);
     if (d < bestDist) { bestDist = d; best = { x, y }; }
   }
   if (best && (best.x !== unit.x || best.y !== unit.y)) {
@@ -722,13 +743,13 @@ function nearestEnemyTarget(state, ai, unit) {
   let best = null, bestDist = Infinity;
   for (const c of state.cities) {
     if (c.owner === ai.id) continue;
-    const d = cheby(c.x, c.y, unit.x, unit.y);
+    const d = hexDistance(c.x, c.y, unit.x, unit.y);
     if (d < bestDist) { bestDist = d; best = { x: c.x, y: c.y }; }
   }
   if (best) return best;
   for (const u of state.units) {
     if (u.owner === ai.id) continue;
-    const d = cheby(u.x, u.y, unit.x, unit.y);
+    const d = hexDistance(u.x, u.y, unit.x, unit.y);
     if (d < bestDist) { bestDist = d; best = { x: u.x, y: u.y }; }
   }
   return best;

@@ -3,7 +3,8 @@
 A simple **Civilization-style domination game** that runs in your browser. Settle
 cities with Settlers, develop the land with Builders, raise an army, and conquer
 every rival city to win. No culture, science, or faith — the only currency is
-**gold**.
+**gold**. The world is a **hexagonal tile map**, so every tile has six
+neighbours.
 
 ## Gameplay
 
@@ -112,6 +113,7 @@ server/
   game/
     defs.js       Static data: terrain, units, improvements, resources
     map.js        Procedural map generation (seeded)
+                  (hex grid uses pointy-top, odd-r offset coordinates)
     engine.js     Authoritative game logic, combat, and AI
 public/
   index.html      App shell (menu + game + overlays)
