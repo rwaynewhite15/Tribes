@@ -396,6 +396,16 @@ async function onClickBoard(sx, sy) {
     }
   }
 
+  // If one of our cities is selected and the tile is a purchasable border tile,
+  // buy it.
+  if (G.selCity && isHumanTurn()) {
+    const buy = G.state._cityBuy && G.state._cityBuy[G.selCity];
+    if (buy && buy.tiles.some((p) => p.x === t.x && p.y === t.y)) {
+      await doAction({ type: 'buy_tile', cityId: G.selCity, x: t.x, y: t.y });
+      return;
+    }
+  }
+
   // Otherwise: select what's under the cursor (prefer own unit, then city).
   G.selTile = null;
   if (unitHere && unitHere.owner === human.id) { G.selUnit = unitHere.id; G.selCity = null; }
@@ -484,6 +494,8 @@ function render() {
   const hints = sel ? s._hints[sel.id] : null;
   const moveSet = new Set(hints ? hints.moves.map((m) => m.x + ',' + m.y) : []);
   const atkSet = new Set(hints ? hints.attacks.map((m) => m.x + ',' + m.y) : []);
+  const buy = (G.selCity && s._cityBuy) ? s._cityBuy[G.selCity] : null;
+  const buySet = new Set(buy ? buy.tiles.map((p) => p.x + ',' + p.y) : []);
 
   // Visible world rect (+margin) so we only draw hexes that are on screen.
   const vx0 = G.cam.x - HEX_W, vy0 = G.cam.y - HEX_H;
@@ -511,10 +523,17 @@ function render() {
         }
       }
 
-      // move / attack highlights
+      // move / attack / buy highlights
       const key = x + ',' + y;
       if (atkSet.has(key)) { ctx.fillStyle = 'rgba(224,82,82,0.42)'; ctx.fill(); }
       else if (moveSet.has(key)) { ctx.fillStyle = 'rgba(79,157,222,0.30)'; ctx.fill(); }
+      else if (buySet.has(key)) {
+        ctx.fillStyle = 'rgba(240,180,40,0.22)'; ctx.fill();
+        hexPath(c.x, c.y, HEX_S - 3);
+        ctx.setLineDash([5, 4]); ctx.strokeStyle = 'rgba(240,196,80,0.95)'; ctx.lineWidth = 2; ctx.stroke();
+        ctx.setLineDash([]);
+        drawGlyph('⛁' + buy.cost, c.x, c.y + HEX_S * 0.12, 13, '#ffe082', 'center');
+      }
 
       // resource / improvement glyphs
       if (tile.resource) {
@@ -694,6 +713,12 @@ function renderSelection() {
     html += `<div class="statline"><span class="stat">Defence <b>${s._cityDef[c.id]}</b></span><span class="stat">Growth <b>${c.growth}/6</b></span></div>`;
     html += hpBarHtml(c.hp, c.maxHp, '#e0c050');
     if (mine && isHumanTurn()) {
+      const buy = s._cityBuy && s._cityBuy[c.id];
+      if (buy && buy.tiles.length) {
+        const afford = human.gold >= buy.cost;
+        html += `<div class="section-h">Territory</div>`;
+        html += `<p class="hint">Borders grow toward rivals as the city grows. Tap a <b style="color:#ffe082">gold-dashed</b> tile to buy it for <b>⛁ ${buy.cost}</b>${afford ? '' : ' <span style="color:var(--danger)">(not enough gold)</span>'}.</p>`;
+      }
       html += `<div class="section-h">Train units (gold ⛁ ${Math.floor(human.gold)})</div><div class="buy-grid" id="buy-grid"></div>`;
     } else if (!mine) {
       html += `<p class="hint">An enemy city. Bombard it to zero HP, then capture with an adjacent melee unit.</p>`;

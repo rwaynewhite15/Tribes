@@ -4,7 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import {
   createGame, applyAction, reachableTiles, attackTargets, reseedIdCounter,
-  cityDefenseStrength,
+  cityDefenseStrength, cityFrontierTiles, tileBuyCost,
 } from './game/engine.js';
 import { UNITS, IMPROVEMENTS, TERRAIN, RESOURCES } from './game/defs.js';
 import {
@@ -23,6 +23,7 @@ const HUMAN = (state) => state.players.find((p) => p.isHuman);
 function withHints(state) {
   const view = JSON.parse(JSON.stringify(state));
   const hints = {};
+  const cityBuy = {};
   const human = HUMAN(state);
   if (human && state.players[state.currentPlayer].id === human.id && !state.gameOver) {
     for (const u of state.units) {
@@ -33,8 +34,17 @@ function withHints(state) {
         attacks: attackTargets(state, u),
       };
     }
+    // Purchasable border tiles + the next tile's price, per owned city.
+    for (const c of state.cities) {
+      if (c.owner !== human.id) continue;
+      cityBuy[c.id] = {
+        cost: tileBuyCost(c),
+        tiles: cityFrontierTiles(state, c).map((t) => ({ x: t.x, y: t.y })),
+      };
+    }
   }
   view._hints = hints;
+  view._cityBuy = cityBuy;
   // City defence strength for display.
   view._cityDef = {};
   for (const c of state.cities) view._cityDef[c.id] = cityDefenseStrength(state, c);

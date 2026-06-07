@@ -67,8 +67,13 @@ export const CITY = {
   // turns of accumulated food (gold-funded) needed to grow by 1 pop
   growthEvery: 6,
   minDistanceBetweenCities: 3,
-  // tiles within this Chebyshev radius are claimed/worked by the city
+  // hex radius of tiles claimed/worked by a city when it is founded
   workRadius: 1,
+  // a city's territory may expand (via growth or purchase) out to this hex radius
+  maxRadius: 3,
+  // buying a border tile: cost = base + step * (tiles already purchased by the city)
+  tileBuyBase: 20,
+  tileBuyStep: 12,
 };
 
 export const STARTING_GOLD = 60;

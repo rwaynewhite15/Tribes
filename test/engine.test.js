@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createGame, applyAction, reachableTiles, reseedIdCounter, tileAt,
-  hexNeighbors, hexDistance,
+  hexNeighbors, hexDistance, cityFrontierTiles, tileBuyCost,
 } from '../server/game/engine.js';
 
 function humanId(state) { return state.players.find((p) => p.isHuman).id; }
@@ -79,6 +79,39 @@ test('builders can only improve tiles inside their own territory', () => {
   const badRes = applyAction(s, hid, { type: 'build', unitId: builder2.id, improvement: 'mine' });
   assert.equal(badRes.ok, false, 'building outside territory is rejected');
   assert.equal(far.improvement, null, 'no improvement placed off-territory');
+});
+
+test('a player can purchase a bordering tile to expand a city', () => {
+  const s = createGame({ width: 18, height: 12, aiPlayers: 1, seed: 7 });
+  const hid = humanId(s);
+  const settler = s.units.find((u) => u.owner === hid && u.type === 'settler');
+  applyAction(s, hid, { type: 'found_city', unitId: settler.id });
+  const city = s.cities[0];
+  const player = s.players.find((p) => p.id === hid);
+  player.gold = 500;
+
+  const frontier = cityFrontierTiles(s, city);
+  assert.ok(frontier.length > 0, 'city has frontier tiles to buy');
+  const target = frontier[0];
+  // Make it a grassland farm-yielding tile so the economy clearly increases.
+  target.terrain = 'grassland'; target.improvement = null; target.resource = null;
+  const cost = tileBuyCost(city);
+  const goldBefore = player.gold;
+  const gptBefore = city.goldPerTurn;
+
+  const res = applyAction(s, hid, { type: 'buy_tile', cityId: city.id, x: target.x, y: target.y });
+  assert.ok(res.ok, res.error);
+  assert.equal(target.ownerCity, city.id, 'tile now owned by the city');
+  assert.equal(player.gold, goldBefore - cost, 'gold deducted by cost');
+  assert.equal(city.tilesPurchased, 1, 'purchase counter incremented');
+  assert.ok(city.goldPerTurn > gptBefore, 'owning the new tile raises income');
+  // Next tile costs more.
+  assert.ok(tileBuyCost(city) > cost, 'each purchase raises the price');
+
+  // Cannot buy a far-off non-bordering tile.
+  const far = s.tiles.find((t) => !t.ownerCity && hexDistance(city.x, city.y, t.x, t.y) > 4);
+  const bad = applyAction(s, hid, { type: 'buy_tile', cityId: city.id, x: far.x, y: far.y });
+  assert.equal(bad.ok, false, 'non-bordering tile rejected');
 });
 
 test('cannot found two cities too close together', () => {

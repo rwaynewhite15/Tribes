@@ -172,17 +172,81 @@ export function tileGold(tile) {
 
 export function recomputeEconomy(state) {
   for (const p of state.players) p.goldPerTurn = 0;
-  for (const c of state.cities) {
-    let gold = CITY.baseGold;
-    for (const t of tilesWithin(state, c.x, c.y, CITY.workRadius)) {
-      if (t.x === c.x && t.y === c.y) continue; // centre handled by baseGold
-      if (t.ownerCity && t.ownerCity !== c.id) continue;
-      gold += tileGold(t);
-    }
-    c.goldPerTurn = gold;
-    const owner = playerById(state, c.owner);
-    if (owner) owner.goldPerTurn += gold;
+  // A city earns from every tile it owns (its whole territory), plus a base
+  // yield for the city centre. Territory grows with population and purchases.
+  const gold = new Map();
+  for (const c of state.cities) gold.set(c.id, CITY.baseGold);
+  for (const t of state.tiles) {
+    if (!t.ownerCity || !gold.has(t.ownerCity)) continue;
+    const c = state.cities.find((cc) => cc.id === t.ownerCity);
+    if (!c || (t.x === c.x && t.y === c.y)) continue; // centre handled by baseGold
+    gold.set(t.ownerCity, gold.get(t.ownerCity) + tileGold(t));
   }
+  for (const c of state.cities) {
+    c.goldPerTurn = gold.get(c.id);
+    const owner = playerById(state, c.owner);
+    if (owner) owner.goldPerTurn += c.goldPerTurn;
+  }
+}
+
+// Unowned, in-bounds tiles adjacent to this city's territory, within maxRadius.
+// These are the tiles the city may expand into or the player may purchase.
+export function cityFrontierTiles(state, city) {
+  const seen = new Set();
+  const out = [];
+  for (const t of state.tiles) {
+    if (t.ownerCity !== city.id) continue;
+    for (const [nx, ny] of hexNeighbors(t.x, t.y)) {
+      if (!inBounds(state, nx, ny)) continue;
+      const nt = tileAt(state, nx, ny);
+      if (nt.ownerCity) continue;
+      if (hexDistance(city.x, city.y, nx, ny) > CITY.maxRadius) continue;
+      const key = `${nx},${ny}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(nt);
+    }
+  }
+  return out;
+}
+
+// The nearest tile owned by a different city (falling back to a city centre).
+function nearestOtherCityTile(state, city) {
+  let best = null, bd = Infinity;
+  for (const t of state.tiles) {
+    if (!t.ownerCity || t.ownerCity === city.id) continue;
+    const d = hexDistance(city.x, city.y, t.x, t.y);
+    if (d < bd) { bd = d; best = { x: t.x, y: t.y }; }
+  }
+  if (best) return best;
+  for (const c of state.cities) {
+    if (c.id === city.id) continue;
+    const d = hexDistance(city.x, city.y, c.x, c.y);
+    if (d < bd) { bd = d; best = { x: c.x, y: c.y }; }
+  }
+  return best;
+}
+
+// Claim one new border tile, heading toward the nearest other city's territory.
+function expandCityBorder(state, city) {
+  const frontier = cityFrontierTiles(state, city);
+  if (!frontier.length) return false;
+  const target = nearestOtherCityTile(state, city);
+  let best = null, bestScore = Infinity;
+  for (const t of frontier) {
+    // Toward the nearest rival territory; tie-break toward more valuable land.
+    let score = target ? hexDistance(t.x, t.y, target.x, target.y) : 0;
+    score -= tileGold(t) * 0.01;
+    if (!TERRAIN[t.terrain].passable) score += 0.5; // mildly avoid water/mountains
+    if (score < bestScore) { bestScore = score; best = t; }
+  }
+  if (!best) return false;
+  best.ownerCity = city.id;
+  return true;
+}
+
+export function tileBuyCost(city) {
+  return CITY.tileBuyBase + CITY.tileBuyStep * (city.tilesPurchased || 0);
 }
 
 export function cityDefenseStrength(state, city) {
@@ -387,6 +451,7 @@ export function applyAction(state, playerId, action) {
     case 'build':       return doBuild(state, player, action);
     case 'harvest':     return doHarvest(state, player, action);
     case 'buy_unit':    return doBuyUnit(state, player, action);
+    case 'buy_tile':    return doBuyTile(state, player, action);
     case 'fortify':     return doFortify(state, player, action);
     case 'skip':        return doSkip(state, player, action);
     case 'end_turn':    return doEndTurn(state, player);
@@ -445,6 +510,7 @@ function doFoundCity(state, player, { unitId }) {
     population: 1,
     growth: 0,
     goldPerTurn: 0,
+    tilesPurchased: 0,
     captured: false,
   };
   state.cities.push(city);
@@ -544,6 +610,28 @@ function doBuyUnit(state, player, { cityId, unitType }) {
   return { ok: true };
 }
 
+function doBuyTile(state, player, { cityId, x, y }) {
+  const city = state.cities.find((c) => c.id === cityId);
+  if (!city) return { ok: false, error: 'City not found.' };
+  if (city.owner !== player.id) return { ok: false, error: 'Not your city.' };
+  const tile = tileAt(state, x, y);
+  if (!tile) return { ok: false, error: 'No such tile.' };
+  if (tile.ownerCity) return { ok: false, error: 'That tile already belongs to a city.' };
+  // Must be a frontier tile of this city (adjacent to its land, within maxRadius).
+  const frontier = cityFrontierTiles(state, city);
+  if (!frontier.some((t) => t.x === x && t.y === y)) {
+    return { ok: false, error: 'You can only buy a tile bordering this city.' };
+  }
+  const cost = tileBuyCost(city);
+  if (player.gold < cost) return { ok: false, error: `Need ${cost} gold to buy this tile.` };
+  player.gold -= cost;
+  tile.ownerCity = city.id;
+  city.tilesPurchased += 1;
+  recomputeEconomy(state);
+  pushLog(state, `${player.name} purchased a tile for ${city.name} (${cost} gold).`);
+  return { ok: true };
+}
+
 function doFortify(state, player, { unitId }) {
   const { unit, error } = ownUnit(state, player, unitId);
   if (error) return { ok: false, error };
@@ -580,9 +668,13 @@ function startTurnFor(state, player) {
     if (c.growth >= CITY.growthEvery) {
       c.growth = 0;
       c.population += 1;
-      pushLog(state, `${c.name} grew to population ${c.population}.`);
+      // Each new citizen pushes the city's border one tile toward the nearest
+      // rival territory.
+      const grew = expandCityBorder(state, c);
+      pushLog(state, `${c.name} grew to population ${c.population}${grew ? ' and expanded its borders.' : '.'}`);
     }
   }
+  recomputeEconomy(state); // territory may have changed
 }
 
 function collectIncome(state, player) {
