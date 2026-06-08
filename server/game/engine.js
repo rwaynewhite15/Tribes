@@ -24,6 +24,22 @@ export function reseedIdCounter(state) {
   _idCounter = max + 1;
 }
 
+// Bring a loaded save up to the current schema. Pre-lobby saves lack phase and
+// the per-player type/joined/host/token fields the multiplayer model relies on.
+export function normalizeState(state) {
+  if (!state) return state;
+  if (!state.phase) state.phase = 'active';
+  if (state.openSlots == null) state.openSlots = 0;
+  for (const p of state.players) {
+    if (!p.type) p.type = p.isHuman ? 'human' : 'ai';
+    p.isHuman = p.type === 'human';
+    if (p.joined === undefined) p.joined = p.type === 'human';
+    if (p.host === undefined) p.host = false;
+    if (p.token === undefined) p.token = null;
+  }
+  return state;
+}
+
 // --- Geometry helpers --------------------------------------------------------
 export const idx = (state, x, y) => y * state.width + x;
 export const inBounds = (state, x, y) => x >= 0 && y >= 0 && x < state.width && y < state.height;
@@ -77,22 +93,29 @@ export function playerById(state, id) {
 }
 
 // --- Game creation -----------------------------------------------------------
-export function createGame({ name = 'New Game', width = 18, height = 12, aiPlayers = 1, seed, spectate = false } = {}) {
+export function createGame({ name = 'New Game', width = 18, height = 12, aiPlayers = 1, seed, spectate = false, openSlots = 0 } = {}) {
   _idCounter = 1;
   const actualSeed = seed ?? Math.floor(Math.random() * 1e9);
   const tiles = generateMap(width, height, actualSeed);
 
   const colors = ['#1565c0', '#c62828', '#2e7d32', '#6a1b9a', '#ef6c00', '#00838f'];
   // Spectate = AI-only: no human, every player is an AI civ (at least two).
+  // Otherwise: player 0 is the host, plus `openSlots` joinable human slots,
+  // plus `aiPlayers` AI civs.
   const aiCount = spectate ? Math.max(2, aiPlayers) : aiPlayers;
-  const playerCount = (spectate ? 0 : 1) + aiCount;
+  const humanCount = spectate ? 0 : (1 + openSlots);
+  const playerCount = humanCount + aiCount;
   const players = [];
   for (let p = 0; p < playerCount; p++) {
-    const isHuman = !spectate && p === 0;
+    const human = p < humanCount;
     players.push({
       id: nextId('p'),
-      name: spectate ? `Civ ${p + 1}` : (p === 0 ? 'You' : `Rival ${p}`),
-      isHuman,
+      name: spectate ? `Civ ${p + 1}` : (human ? `Player ${p + 1}` : `AI ${p - humanCount + 1}`),
+      type: human ? 'human' : 'ai',
+      isHuman: human,
+      host: human && p === 0,
+      joined: human && p === 0, // the host occupies their slot immediately
+      token: null,
       gold: STARTING_GOLD,
       goldPerTurn: 0,
       color: colors[p % colors.length],
@@ -100,11 +123,17 @@ export function createGame({ name = 'New Game', width = 18, height = 12, aiPlaye
     });
   }
 
+  // A multiplayer game (open slots) waits in a lobby for the host to start;
+  // single-player and spectator games begin immediately.
+  const phase = (!spectate && openSlots > 0) ? 'lobby' : 'active';
+
   const state = {
     id: null,
     name,
     seed: actualSeed,
     spectate,
+    phase,
+    openSlots,
     width,
     height,
     turn: 1,
@@ -135,8 +164,27 @@ export function createGame({ name = 'New Game', width = 18, height = 12, aiPlaye
   recomputeEconomy(state);
   pushLog(state, spectate
     ? `Turn 1 — ${players.length} AI civilizations begin. Press Play to watch.`
-    : `Turn 1 — ${players[0].name} begins. Settle a city to start your empire.`);
+    : (phase === 'lobby'
+      ? `Lobby open — waiting for players to join and the host to start.`
+      : `Turn 1 — settle a city to start your empire.`));
   return state;
+}
+
+// Begin a lobby game: any human slot nobody joined becomes an AI civ.
+export function startGame(state) {
+  if (state.phase !== 'lobby') return { ok: false, error: 'The game has already started.' };
+  for (const p of state.players) {
+    if (p.type === 'human' && !p.joined) {
+      p.type = 'ai';
+      p.isHuman = false;
+      p.name = `AI (${p.name})`;
+    }
+  }
+  state.phase = 'active';
+  state.currentPlayer = 0;
+  startTurnFor(state, state.players[0]);
+  pushLog(state, 'The game has begun!');
+  return { ok: true };
 }
 
 function spawnUnit(state, owner, type, x, y) {
@@ -444,6 +492,7 @@ export function checkVictory(state) {
 // Every mutating action funnels through here. playerId is the actor.
 export function applyAction(state, playerId, action) {
   if (state.gameOver) return { ok: false, error: 'The game is over.' };
+  if (state.phase === 'lobby') return { ok: false, error: 'The game has not started yet.' };
   const player = playerById(state, playerId);
   if (!player) return { ok: false, error: 'Unknown player.' };
   if (state.players[state.currentPlayer].id !== playerId) {
@@ -711,9 +760,10 @@ function advanceToNextPlayer(state) {
   startTurnFor(state, next);
   checkVictory(state);
 
-  // Run AI turns immediately so control returns to the human player.
+  // Run AI turns immediately so control returns to a human player. With several
+  // humans, play simply rests on whichever human is next.
   let aiGuard = 0;
-  while (!state.gameOver && !state.players[state.currentPlayer].isHuman && aiGuard < state.players.length + 2) {
+  while (!state.gameOver && state.players[state.currentPlayer].type === 'ai' && aiGuard < state.players.length + 2) {
     runAiTurn(state, state.players[state.currentPlayer]);
     collectIncome(state, state.players[state.currentPlayer]);
     state.currentPlayer = (state.currentPlayer + 1) % state.players.length;

@@ -101,7 +101,13 @@ export async function listGames() {
       if (!f.endsWith('.json')) continue;
       try {
         const s = JSON.parse(await fs.readFile(path.join(SAVES_DIR, f), 'utf8'));
-        games.push({ id: s.id, name: s.name, turn: s.turn, gameOver: !!s.gameOver, updatedAt: s.updatedAt || null });
+        const humans = (s.players || []).filter((p) => p.type === 'human' || p.isHuman);
+        games.push({
+          id: s.id, name: s.name, turn: s.turn, gameOver: !!s.gameOver, updatedAt: s.updatedAt || null,
+          phase: s.phase || 'active', spectate: !!s.spectate,
+          openSlots: humans.filter((p) => !p.joined).length,
+          humanSlots: humans.length,
+        });
       } catch { /* skip corrupt save */ }
     }
     games.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
