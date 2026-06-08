@@ -196,6 +196,11 @@ async function startNewGame() {
   const aiPlayers = spectate ? Number($('ng-civs').value) : Number($('ng-ai').value);
   const openSlots = spectate ? 0 : Number($('ng-open').value);
   const playerName = ($('ng-player').value || '').trim() || 'Player 1';
+  // A human-only game (0 AI) needs at least one open seat for a second player.
+  if (!spectate && aiPlayers === 0 && openSlots === 0) {
+    toast('Add at least one rival or one open seat for another player.');
+    return;
+  }
   G.token = null;
   const { ok, data } = await api.post('/api/games', { name, width: w, height: h, aiPlayers, spectate, openSlots, playerName });
   if (!ok) { toast(data.error || 'Failed to create game'); return; }
@@ -935,8 +940,9 @@ function renderSelection() {
     const owner = s.players.find((p) => p.id === c.owner);
     const mine = c.owner === humanId;
     let html = `<div class="sel-title"><span class="ico">★</span> <span style="color:${owner.color}">${c.name}</span></div>`;
-    html += `<div class="sel-sub">${owner.name} · pop ${c.population} · +${c.goldPerTurn} gold/turn</div>`;
+    html += `<div class="sel-sub">${owner.name} · ${c.population} citizens / tiles · +${c.goldPerTurn} gold/turn</div>`;
     html += `<div class="statline"><span class="stat">Defence <b>${s._cityDef[c.id]}</b></span><span class="stat">Growth <b>${c.growth}/6</b></span></div>`;
+    html += `<p class="hint">Each citizen works one tile — the city grows by claiming new land. Population is simply how many tiles it controls.</p>`;
     html += hpBarHtml(c.hp, c.maxHp, '#e0c050');
     if (mine && isHumanTurn()) {
       const buy = s._cityBuy && s._cityBuy[c.id];
