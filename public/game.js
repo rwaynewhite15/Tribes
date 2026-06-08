@@ -97,7 +97,12 @@ window.addEventListener('DOMContentLoaded', async () => {
   bindMenu();
   bindGameControls();
   await refreshSavedGames();
-  await tryResume();
+  // A shareable invite link (?join=<gameId>) takes the player straight into
+  // that game's lobby; otherwise resume whatever they were last playing.
+  let joinId = null;
+  try { joinId = new URLSearchParams(location.search).get('join'); } catch {}
+  if (joinId) await joinViaLink(joinId);
+  else await tryResume();
 });
 
 const LAST_GAME_KEY = 'tribes.lastGameId';
@@ -134,6 +139,21 @@ function bindMenu() {
   });
   $('lobby-start').addEventListener('click', startLobby);
   $('lobby-leave').addEventListener('click', showMenu);
+  $('lobby-invite').addEventListener('click', copyInviteLink);
+}
+
+function inviteLink() { return `${location.origin}/?join=${G.gameId}`; }
+
+// Copy the lobby invite link to the clipboard, falling back to a prompt if the
+// Clipboard API is unavailable (e.g. an insecure http origin).
+async function copyInviteLink() {
+  const url = inviteLink();
+  try {
+    await navigator.clipboard.writeText(url);
+    toast('Invite link copied!', true);
+  } catch {
+    try { window.prompt('Copy this invite link:', url); } catch { toast(url); }
+  }
 }
 
 async function refreshSavedGames() {
@@ -197,6 +217,7 @@ async function startNewGame() {
   const openSlots = spectate ? 0 : Number($('ng-open').value);
   const playerName = ($('ng-player').value || '').trim() || 'Player 1';
   const difficulty = $('ng-difficulty').value;
+  rememberName(playerName);
   // A human-only game (0 AI) needs at least one open seat for a second player.
   if (!spectate && aiPlayers === 0 && openSlots === 0) {
     toast('Add at least one rival or one open seat for another player.');
@@ -222,18 +243,46 @@ async function loadGame(id) {
   if (state.phase === 'lobby') enterLobby(state); else enterGame(state);
 }
 
+// Remember the last display name the player used so prompts pre-fill it.
+const NAME_KEY = 'tribes.playerName';
+const lastName = () => { try { return localStorage.getItem(NAME_KEY) || 'Player'; } catch { return 'Player'; } };
+const rememberName = (n) => { try { if (n) localStorage.setItem(NAME_KEY, n); } catch {} };
+
 // Claim an open seat in someone else's lobby.
 async function joinGame(id) {
   G.gameId = id;
   G.token = loadToken(id); // rejoin our seat if we already hold one
   let playerName = null;
-  try { playerName = window.prompt('Choose a display name:', 'Player'); } catch {}
+  try { playerName = window.prompt('Choose a display name:', lastName()); } catch {}
   if (playerName === null) return; // cancelled
-  const { ok, data } = await api.post(`/api/games/${id}/join`, { playerName: playerName.trim() || 'Player' });
+  const name = playerName.trim() || 'Player';
+  rememberName(name);
+  const { ok, data } = await api.post(`/api/games/${id}/join`, { playerName: name });
   if (!ok) { toast(data.error || 'Could not join'); return; }
   G.token = data.token || G.token;
   saveToken(id, G.token);
   if (data.state.phase === 'lobby') enterLobby(data.state); else enterGame(data.state);
+}
+
+// Open a shared invite link: jump back into a seat we already hold, claim an
+// open one, or — if the game is already underway — fall back to spectating.
+async function joinViaLink(id) {
+  // Strip the ?join= param so a later refresh doesn't re-trigger the flow.
+  try { history.replaceState({}, '', location.pathname); } catch {}
+  G.gameId = id;
+  G.token = loadToken(id);
+  const res = await api.get('/api/games/' + id);
+  if (!res || !res.state) { toast('That game link is no longer valid.'); return; }
+  // Already holding a seat in this game → go straight in.
+  if (G.token && res.state._you) {
+    if (res.state.phase === 'lobby') enterLobby(res.state); else enterGame(res.state);
+    return;
+  }
+  // A lobby with room → claim a seat (prompts for a name).
+  if (res.state.phase === 'lobby') { await joinGame(id); return; }
+  // Otherwise the game has started or is full; open it to watch.
+  toast('That game has already started — opening it to watch.');
+  enterGame(res.state);
 }
 
 // Host action: leave the lobby and begin the game for everyone.
@@ -292,6 +341,7 @@ function renderLobby() {
   const isHost = !!(mine && mine.host);
   $('lobby-start').classList.toggle('hidden', !isHost);
   $('lobby-wait').classList.toggle('hidden', isHost);
+  $('lobby-invite-url').value = inviteLink();
 }
 
 // ---------------------------------------------------------------------------
