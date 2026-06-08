@@ -394,10 +394,12 @@ function enterGame(state) {
   $('hud-spectate').classList.toggle('hidden', !G.spectate);
   canvas = $('board');
   ctx = canvas.getContext('2d');
+  // Populate the scoreboard first so the board area is sized to the space that
+  // remains beneath it.
+  updateHud();
   resizeCanvas();
   centerOnHumanStart();
   render();
-  updateHud();
   renderLog();
   renderSelection();
   setSheetTab('sel');
@@ -936,6 +938,31 @@ function updateHud() {
     $('hud-gpt').textContent = lead ? `cities · leader ${lead.name}` : '';
     $('hud-cities').textContent = s.players.filter((p) => p.alive).length + ' civs';
   }
+  renderScoreboard();
+}
+
+// Top scoreboard: every player's cities, units and gold at a glance. The active
+// player's chip is highlighted; eliminated players are dimmed.
+function renderScoreboard() {
+  const el = $('scoreboard');
+  if (!el) return;
+  const s = G.state;
+  const live = s.phase !== 'lobby' && !s.gameOver;
+  el.innerHTML = s.players.map((p, i) => {
+    const cities = s.cities.filter((c) => c.owner === p.id).length;
+    const units = s.units.filter((u) => u.owner === p.id).length;
+    const cls = ['sb-chip'];
+    if (live && i === s.currentPlayer) cls.push('active');
+    if (!p.alive) cls.push('dead');
+    const you = p.id === s._you ? ' <span class="sb-you">(you)</span>' : '';
+    return `<div class="${cls.join(' ')}">`
+      + `<span class="sb-dot" style="background:${p.color}"></span>`
+      + `<span class="sb-name">${escapeHtml(p.name)}${you}</span>`
+      + `<span class="sb-stat" title="Cities">★ ${cities}</span>`
+      + `<span class="sb-stat" title="Units">⚔ ${units}</span>`
+      + `<span class="sb-stat" title="Gold">⛁ ${Math.floor(p.gold)}</span>`
+      + `</div>`;
+  }).join('');
 }
 
 // The living civilisation with the most cities (for the spectator HUD).
