@@ -103,6 +103,9 @@ footer { color: var(--muted); font-size: 13px; }
 .lobby-list .lb-role.open { color: var(--good); }
 .lobby-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .lobby-actions .hint { margin: 0; }
+.invite-row { display: flex; gap: 8px; margin: 4px 0 14px; }
+.invite-row input { flex: 1; min-width: 0; padding: 8px 10px; font-size: 13px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; color: var(--muted); }
+.invite-row button { flex: 0 0 auto; white-space: nowrap; }
 
 /* ---- Game ---- */
 #game { display: flex; flex-direction: column; }
