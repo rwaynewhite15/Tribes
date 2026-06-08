@@ -86,12 +86,24 @@ export async function loadGame(id) {
 
 export async function listGames() {
   if (mode === 'postgres') {
+    // The full state lives in the JSONB `state` column, so derive the lobby
+    // fields the menu needs (phase, open-seat counts) straight from it —
+    // otherwise joinable games show up as "Watch" instead of "Join".
     const { rows } = await pool.query(
-      `SELECT id, name, turn, game_over, updated_at
+      `SELECT id, name, turn, game_over, updated_at,
+              COALESCE(state->>'phase', 'active') AS phase,
+              COALESCE((state->>'spectate')::boolean, false) AS spectate,
+              (SELECT count(*) FROM jsonb_array_elements(COALESCE(state->'players', '[]'::jsonb)) p
+                 WHERE p->>'type' = 'human' OR (p->>'isHuman')::boolean) AS human_slots,
+              (SELECT count(*) FROM jsonb_array_elements(COALESCE(state->'players', '[]'::jsonb)) p
+                 WHERE (p->>'type' = 'human' OR (p->>'isHuman')::boolean)
+                   AND NOT COALESCE((p->>'joined')::boolean, false)) AS open_slots
          FROM games ORDER BY updated_at DESC LIMIT 100`,
     );
     return rows.map((r) => ({
       id: r.id, name: r.name, turn: r.turn, gameOver: r.game_over, updatedAt: r.updated_at,
+      phase: r.phase, spectate: r.spectate,
+      openSlots: Number(r.open_slots), humanSlots: Number(r.human_slots),
     }));
   }
   try {
