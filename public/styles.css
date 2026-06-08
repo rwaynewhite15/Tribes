@@ -118,6 +118,25 @@ footer { color: var(--muted); font-size: 13px; }
 .hud-item small { color: var(--good); }
 .status { color: var(--accent-2); font-size: 14px; min-height: 18px; }
 
+/* Top scoreboard: one chip per player, scrolls horizontally if it overflows. */
+.scoreboard {
+  flex: 0 0 auto; display: flex; gap: 8px; padding: 6px 10px;
+  background: var(--panel); border-bottom: 1px solid var(--border);
+  overflow-x: auto; overscroll-behavior-x: contain;
+}
+.scoreboard:empty { display: none; }
+.sb-chip {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 7px;
+  padding: 4px 10px; font-size: 12px; white-space: nowrap;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 20px;
+}
+.sb-chip.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.sb-chip.dead { opacity: .4; text-decoration: line-through; }
+.sb-dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; box-shadow: 0 0 0 1px rgba(0,0,0,.4); }
+.sb-name { font-weight: 600; color: var(--ink); }
+.sb-you { color: var(--accent); font-weight: 400; }
+.sb-stat { color: var(--muted); }
+
 .main { flex: 1; display: flex; min-height: 0; position: relative; }
 #board-wrap { flex: 1; position: relative; overflow: hidden; background: #0b0f14; }
 #board { display: block; touch-action: none; }
