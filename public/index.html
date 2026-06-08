@@ -75,12 +75,16 @@
       <h2 id="lobby-name">Game</h2>
       <p id="lobby-sub" class="tagline"></p>
       <ul id="lobby-players" class="lobby-list"></ul>
+      <div class="invite-row">
+        <input id="lobby-invite-url" type="text" readonly aria-label="Invite link" />
+        <button id="lobby-invite" class="ghost">🔗 Copy invite link</button>
+      </div>
       <div class="lobby-actions">
         <button id="lobby-start" class="primary hidden">Start Game</button>
         <span id="lobby-wait" class="hint hidden">Waiting for the host to start…</span>
         <button id="lobby-leave" class="ghost">← Leave</button>
       </div>
-      <p class="hint small">Share this game with friends — they pick an open seat from the menu's game list to join.</p>
+      <p class="hint small">Send the invite link to a friend — it drops them straight into this lobby. They can also pick an open seat from the menu's game list.</p>
     </div>
   </div>
 
