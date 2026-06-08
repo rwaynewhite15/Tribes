@@ -3,7 +3,7 @@
 // whatever state comes back.
 import {
   TERRAIN, IMPROVEMENTS, RESOURCES, UNITS, CITY, STARTING_GOLD,
-  DIFFICULTY, DEFAULT_DIFFICULTY,
+  DIFFICULTY, DEFAULT_DIFFICULTY, MAX_PLAYERS,
 } from './defs.js';
 import { generateMap, findStartTile, makeRng } from './map.js';
 
@@ -107,10 +107,12 @@ export function createGame({ name = 'New Game', width = 18, height = 12, aiPlaye
   const colors = ['#1565c0', '#c62828', '#2e7d32', '#6a1b9a', '#ef6c00', '#00838f'];
   // Spectate = AI-only: no human, every player is an AI civ (at least two).
   // Otherwise: player 0 is the host, plus `openSlots` joinable human slots,
-  // plus `aiPlayers` AI civs.
-  const aiCount = spectate ? Math.max(2, aiPlayers) : aiPlayers;
+  // plus `aiPlayers` AI civs. The total is capped at MAX_PLAYERS so we never
+  // run past the colour palette.
   const humanCount = spectate ? 0 : (1 + openSlots);
-  const playerCount = humanCount + aiCount;
+  const aiWanted = spectate ? Math.max(2, aiPlayers) : aiPlayers;
+  const aiCount = Math.max(0, Math.min(aiWanted, MAX_PLAYERS - humanCount));
+  const playerCount = Math.min(humanCount + aiCount, MAX_PLAYERS);
   const players = [];
   for (let p = 0; p < playerCount; p++) {
     const human = p < humanCount;

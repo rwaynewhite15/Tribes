@@ -8,7 +8,7 @@ import {
   cityDefenseStrength, cityFrontierTiles, tileBuyCost, stepSpectator, startGame,
   normalizeState,
 } from './game/engine.js';
-import { UNITS, IMPROVEMENTS, TERRAIN, RESOURCES, DIFFICULTY, DEFAULT_DIFFICULTY } from './game/defs.js';
+import { UNITS, IMPROVEMENTS, TERRAIN, RESOURCES, DIFFICULTY, DEFAULT_DIFFICULTY, MAX_PLAYERS } from './game/defs.js';
 import {
   initStorage, saveGame, loadGame, listGames, deleteGame, storageMode,
 } from './db.js';
@@ -89,13 +89,19 @@ app.get('/api/games', async (req, res) => {
 app.post('/api/games', async (req, res) => {
   try {
     const { name, width, height, aiPlayers, spectate, openSlots, playerName, difficulty } = req.body || {};
-    const ai = clamp(aiPlayers, 0, 5, 1);
-    const open = clamp(openSlots, 0, 5, 0);
+    const ai = clamp(aiPlayers, 0, MAX_PLAYERS, 1);
+    const open = clamp(openSlots, 0, MAX_PLAYERS - 1, 0);
     const diff = DIFFICULTY[difficulty] ? difficulty : DEFAULT_DIFFICULTY;
-    // A non-spectator game needs at least two players. With no AI, that means
-    // at least one open seat for another human (a human-only game).
-    if (!spectate && (1 + open + ai) < 2) {
-      return res.status(400).json({ error: 'A game needs at least one rival or one open seat for another player.' });
+    if (!spectate) {
+      // A non-spectator game needs at least two players. With no AI, that means
+      // at least one open seat for another human (a human-only game).
+      if ((1 + open + ai) < 2) {
+        return res.status(400).json({ error: 'A game needs at least one rival or one open seat for another player.' });
+      }
+      // The host, open seats and AI rivals together can't exceed the cap.
+      if ((1 + open + ai) > MAX_PLAYERS) {
+        return res.status(400).json({ error: `A game can have at most ${MAX_PLAYERS} players.` });
+      }
     }
     const state = createGame({
       name: (name || 'New Game').slice(0, 60),

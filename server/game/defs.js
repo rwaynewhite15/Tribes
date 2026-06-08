@@ -80,6 +80,9 @@ export const CITY = {
 
 export const STARTING_GOLD = 60;
 
+// Maximum players in a single game (humans + AI). Bounded by the colour palette.
+export const MAX_PLAYERS = 6;
+
 // AI difficulty. Harder levels give the AI economic and expansion bonuses and
 // push it to field bigger armies — it earns its edge through "handicap" bonuses
 // plus smarter play, not by cheating at the combat dice.

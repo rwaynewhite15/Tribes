@@ -136,6 +136,23 @@ test('a player can purchase a bordering tile to expand a city', () => {
   assert.equal(bad.ok, false, 'non-bordering tile rejected');
 });
 
+test('games support up to six players and never exceed the cap', () => {
+  // AI-only: six civs means six players (the bug was a clamp to five).
+  const watch = createGame({ aiPlayers: 6, seed: 5, spectate: true });
+  assert.equal(watch.players.length, 6, 'six AI civs');
+  assert.ok(watch.players.every((p) => p.type === 'ai'));
+
+  // Single-player: one human host plus five AI rivals = six players.
+  const solo = createGame({ aiPlayers: 5, openSlots: 0, seed: 5 });
+  assert.equal(solo.players.length, 6);
+  assert.equal(solo.players.filter((p) => p.type === 'human').length, 1);
+  assert.equal(solo.players.filter((p) => p.type === 'ai').length, 5);
+
+  // A request that would overflow the cap is trimmed down to six.
+  const over = createGame({ aiPlayers: 5, openSlots: 5, seed: 5 });
+  assert.equal(over.players.length, 6, 'capped at six players');
+});
+
 test('spectator (AI-only) game has no human and can be stepped to a result', () => {
   const s = createGame({ width: 16, height: 10, aiPlayers: 3, seed: 17, spectate: true });
   assert.equal(s.spectate, true);

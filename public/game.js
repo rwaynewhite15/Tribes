@@ -202,6 +202,11 @@ async function startNewGame() {
     toast('Add at least one rival or one open seat for another player.');
     return;
   }
+  // Host + open seats + AI rivals can't exceed the 6-player cap.
+  if (!spectate && (1 + openSlots + aiPlayers) > 6) {
+    toast('A game can have at most 6 players (you + open seats + rivals).');
+    return;
+  }
   G.token = null;
   const { ok, data } = await api.post('/api/games', { name, width: w, height: h, aiPlayers, spectate, openSlots, playerName, difficulty });
   if (!ok) { toast(data.error || 'Failed to create game'); return; }
