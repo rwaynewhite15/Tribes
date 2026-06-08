@@ -79,3 +79,21 @@ export const CITY = {
 };
 
 export const STARTING_GOLD = 60;
+
+// Maximum players in a single game (humans + AI). Bounded by the colour palette.
+export const MAX_PLAYERS = 6;
+
+// AI difficulty. Harder levels give the AI economic and expansion bonuses and
+// push it to field bigger armies — it earns its edge through "handicap" bonuses
+// plus smarter play, not by cheating at the combat dice.
+//   incomeMult  : multiplier on the AI's gold/turn
+//   startBonus  : extra starting gold per AI
+//   maxCities   : how many cities the AI keeps expanding toward
+//   armyPerCity : target military units per city it owns
+export const DIFFICULTY = {
+  easy:   { label: 'Easy',   incomeMult: 0.8, startBonus: 0,   maxCities: 3, armyPerCity: 1.5 },
+  normal: { label: 'Normal', incomeMult: 1.1, startBonus: 20,  maxCities: 4, armyPerCity: 2 },
+  hard:   { label: 'Hard',   incomeMult: 1.5, startBonus: 60,  maxCities: 6, armyPerCity: 3 },
+  deity:  { label: 'Deity',  incomeMult: 2.0, startBonus: 120, maxCities: 8, armyPerCity: 4 },
+};
+export const DEFAULT_DIFFICULTY = 'hard';

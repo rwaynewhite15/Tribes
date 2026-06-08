@@ -216,14 +216,20 @@ async function startNewGame() {
   const aiPlayers = spectate ? Number($('ng-civs').value) : Number($('ng-ai').value);
   const openSlots = spectate ? 0 : Number($('ng-open').value);
   const playerName = ($('ng-player').value || '').trim() || 'Player 1';
+  const difficulty = $('ng-difficulty').value;
   rememberName(playerName);
   // A human-only game (0 AI) needs at least one open seat for a second player.
   if (!spectate && aiPlayers === 0 && openSlots === 0) {
     toast('Add at least one rival or one open seat for another player.');
     return;
   }
+  // Host + open seats + AI rivals can't exceed the 6-player cap.
+  if (!spectate && (1 + openSlots + aiPlayers) > 6) {
+    toast('A game can have at most 6 players (you + open seats + rivals).');
+    return;
+  }
   G.token = null;
-  const { ok, data } = await api.post('/api/games', { name, width: w, height: h, aiPlayers, spectate, openSlots, playerName });
+  const { ok, data } = await api.post('/api/games', { name, width: w, height: h, aiPlayers, spectate, openSlots, playerName, difficulty });
   if (!ok) { toast(data.error || 'Failed to create game'); return; }
   G.token = data.token || null;
   saveToken(data.state.id, data.token);
