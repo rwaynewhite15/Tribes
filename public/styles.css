@@ -17,10 +17,13 @@ body {
   font-family: 'Segoe UI', Roboto, system-ui, sans-serif;
   background: var(--bg);
   color: var(--ink);
-  overflow: hidden;
-  /* Note: pull-to-refresh is intentionally left enabled. The game board blocks
-     the gesture itself via `touch-action: none`, so the map never refreshes,
-     but you can still pull-to-refresh from the menu / top bar. */
+  /* The document itself scrolls so the menu/lobby can grow taller than the
+     viewport on small phones and still support native pull-to-refresh. The
+     game screen pins itself to the viewport (see #game) and the board blocks
+     the gesture via `touch-action: none`, so the map never scrolls/refreshes. */
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;
@@ -43,7 +46,9 @@ button.primary:disabled { background: #5a5236; color: #8d8568; cursor: not-allow
 button.ghost { background: transparent; }
 button:disabled { opacity: .55; cursor: not-allowed; }
 
-.screen { height: 100vh; height: 100dvh; width: 100vw; }
+/* Screens grow with their content (so menus can scroll); the game screen pins
+   itself back to the viewport below. */
+.screen { min-height: 100vh; min-height: 100dvh; width: 100%; }
 
 /* ---- Menu ---- */
 #menu {
@@ -108,7 +113,10 @@ footer { color: var(--muted); font-size: 13px; }
 .invite-row button { flex: 0 0 auto; white-space: nowrap; }
 
 /* ---- Game ---- */
-#game { display: flex; flex-direction: column; }
+#game { display: flex; flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden; }
+/* Pull-to-refresh stays on for the menu/lobby. Suppress it while the game
+   screen is up so a stray downward swipe never reloads the board. */
+body:has(#game:not(.hidden)) { overscroll-behavior-y: contain; }
 #topbar {
   display: flex; align-items: center; justify-content: space-between;
   padding: 8px 14px; background: var(--panel); border-bottom: 1px solid var(--border);
