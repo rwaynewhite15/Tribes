@@ -8,7 +8,7 @@ import {
   cityDefenseStrength, cityFrontierTiles, tileBuyCost, stepSpectator, startGame,
   normalizeState,
 } from './game/engine.js';
-import { UNITS, IMPROVEMENTS, TERRAIN, RESOURCES } from './game/defs.js';
+import { UNITS, IMPROVEMENTS, TERRAIN, RESOURCES, DIFFICULTY, DEFAULT_DIFFICULTY } from './game/defs.js';
 import {
   initStorage, saveGame, loadGame, listGames, deleteGame, storageMode,
 } from './db.js';
@@ -88,9 +88,10 @@ app.get('/api/games', async (req, res) => {
 
 app.post('/api/games', async (req, res) => {
   try {
-    const { name, width, height, aiPlayers, spectate, openSlots, playerName } = req.body || {};
+    const { name, width, height, aiPlayers, spectate, openSlots, playerName, difficulty } = req.body || {};
     const ai = clamp(aiPlayers, 0, 5, 1);
     const open = clamp(openSlots, 0, 5, 0);
+    const diff = DIFFICULTY[difficulty] ? difficulty : DEFAULT_DIFFICULTY;
     // A non-spectator game needs at least two players. With no AI, that means
     // at least one open seat for another human (a human-only game).
     if (!spectate && (1 + open + ai) < 2) {
@@ -103,6 +104,7 @@ app.post('/api/games', async (req, res) => {
       aiPlayers: ai,
       openSlots: open,
       spectate: !!spectate,
+      difficulty: diff,
     });
     // The creator becomes the host, holding the first human slot and its token.
     let token = null;

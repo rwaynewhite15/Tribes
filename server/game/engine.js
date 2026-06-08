@@ -3,6 +3,7 @@
 // whatever state comes back.
 import {
   TERRAIN, IMPROVEMENTS, RESOURCES, UNITS, CITY, STARTING_GOLD,
+  DIFFICULTY, DEFAULT_DIFFICULTY,
 } from './defs.js';
 import { generateMap, findStartTile, makeRng } from './map.js';
 
@@ -30,6 +31,7 @@ export function normalizeState(state) {
   if (!state) return state;
   if (!state.phase) state.phase = 'active';
   if (state.openSlots == null) state.openSlots = 0;
+  if (!state.difficulty) state.difficulty = DEFAULT_DIFFICULTY;
   for (const p of state.players) {
     if (!p.type) p.type = p.isHuman ? 'human' : 'ai';
     p.isHuman = p.type === 'human';
@@ -96,10 +98,11 @@ export function playerById(state, id) {
 }
 
 // --- Game creation -----------------------------------------------------------
-export function createGame({ name = 'New Game', width = 18, height = 12, aiPlayers = 1, seed, spectate = false, openSlots = 0 } = {}) {
+export function createGame({ name = 'New Game', width = 18, height = 12, aiPlayers = 1, seed, spectate = false, openSlots = 0, difficulty = DEFAULT_DIFFICULTY } = {}) {
   _idCounter = 1;
   const actualSeed = seed ?? Math.floor(Math.random() * 1e9);
   const tiles = generateMap(width, height, actualSeed);
+  const diff = DIFFICULTY[difficulty] || DIFFICULTY[DEFAULT_DIFFICULTY];
 
   const colors = ['#1565c0', '#c62828', '#2e7d32', '#6a1b9a', '#ef6c00', '#00838f'];
   // Spectate = AI-only: no human, every player is an AI civ (at least two).
@@ -119,7 +122,8 @@ export function createGame({ name = 'New Game', width = 18, height = 12, aiPlaye
       host: human && p === 0,
       joined: human && p === 0, // the host occupies their slot immediately
       token: null,
-      gold: STARTING_GOLD,
+      // Harder AIs start with extra gold; humans always start at the baseline.
+      gold: human ? STARTING_GOLD : STARTING_GOLD + diff.startBonus,
       goldPerTurn: 0,
       color: colors[p % colors.length],
       alive: true,
@@ -137,6 +141,7 @@ export function createGame({ name = 'New Game', width = 18, height = 12, aiPlaye
     spectate,
     phase,
     openSlots,
+    difficulty: DIFFICULTY[difficulty] ? difficulty : DEFAULT_DIFFICULTY,
     width,
     height,
     turn: 1,
@@ -248,6 +253,20 @@ export function recomputeEconomy(state) {
     const owner = playerById(state, c.owner);
     if (owner) owner.goldPerTurn += c.goldPerTurn;
   }
+  // Difficulty handicap: the AI's income is scaled up (or down) so harder games
+  // field a wealthier opponent.
+  const mult = diffOf(state).incomeMult;
+  if (mult !== 1) {
+    for (const p of state.players) {
+      if (p.type === 'ai') p.goldPerTurn = Math.round(p.goldPerTurn * mult);
+    }
+  }
+}
+
+// The difficulty settings in force for this game (defaults to the standard
+// level for older saves that predate the setting).
+export function diffOf(state) {
+  return DIFFICULTY[state.difficulty] || DIFFICULTY[DEFAULT_DIFFICULTY];
 }
 
 // A city's population is exactly how many tiles it owns (one citizen per tile).
@@ -907,16 +926,18 @@ function aiBuilder(state, ai, builder) {
 }
 
 function aiMilitary(state, ai, unit) {
-  // Attack if a target is in range.
-  let targets = attackTargets(state, unit);
-  if (targets.length) {
-    const target = pickAiTarget(state, targets);
-    applyDirect(state, ai, { type: 'attack', unitId: unit.id, x: target.x, y: target.y });
-    return;
-  }
-  // Move toward nearest enemy city, then enemy unit.
+  // Badly wounded units fall back to friendly land to heal instead of trading
+  // themselves away — keeping the army intact is what makes the AI threatening.
+  if (unit.hp <= unit.maxHp * 0.3 && aiRetreatToHeal(state, ai, unit)) return;
+
+  // Strike the best worthwhile target already in range.
+  let target = aiBestAttack(state, unit, attackTargets(state, unit));
+  if (target) applyDirect(state, ai, { type: 'attack', unitId: unit.id, x: target.x, y: target.y });
+  if (unit.movesLeft <= 0) return;
+
+  // Advance toward the nearest enemy city (then enemy unit) and try again.
   const goal = nearestEnemyTarget(state, ai, unit);
-  if (!goal) { applyDirect(state, ai, { type: 'fortify', unitId: unit.id }); return; }
+  if (!goal) { if (!unit.fortified) applyDirect(state, ai, { type: 'fortify', unitId: unit.id }); return; }
   const reach = reachableTiles(state, unit);
   let best = null, bestDist = Infinity;
   for (const key of reach.keys()) {
@@ -927,24 +948,63 @@ function aiMilitary(state, ai, unit) {
   if (best && (best.x !== unit.x || best.y !== unit.y)) {
     applyDirect(state, ai, { type: 'move', unitId: unit.id, x: best.x, y: best.y });
   }
-  // Try to attack again after moving.
-  targets = attackTargets(state, unit);
-  if (targets.length) {
-    const target = pickAiTarget(state, targets);
-    applyDirect(state, ai, { type: 'attack', unitId: unit.id, x: target.x, y: target.y });
-  }
+  target = aiBestAttack(state, unit, attackTargets(state, unit));
+  if (target) applyDirect(state, ai, { type: 'attack', unitId: unit.id, x: target.x, y: target.y });
 }
 
-function pickAiTarget(state, targets) {
-  // Prefer cities, then the weakest unit.
-  const cities = targets.filter((t) => t.kind === 'city');
-  if (cities.length) return cities[0];
-  let best = targets[0], bestHp = Infinity;
+// Choose the best target to hit — or none, if a melee unit would only feed
+// itself to a much stronger defender (ranged units never take counter-damage,
+// so they always chip away).
+function aiBestAttack(state, unit, targets) {
+  if (!targets.length) return null;
+  const uDef = UNITS[unit.type];
+  const ranged = uDef.range > 1;
+  let best = null, bestScore = -Infinity;
   for (const t of targets) {
-    const u = state.units.find((x) => x.id === t.id);
-    if (u && u.hp < bestHp) { bestHp = u.hp; best = t; }
+    let defStr, score, finishing = false;
+    if (t.kind === 'city') {
+      const c = state.cities.find((x) => x.id === t.id);
+      if (!c) continue;
+      defStr = cityDefenseStrength(state, c);
+      finishing = c.hp <= 35; // nearly down — a melee unit can capture it
+      score = 120 - defStr;
+      if (finishing) score += 80;
+    } else {
+      const d = state.units.find((x) => x.id === t.id);
+      if (!d) continue;
+      defStr = UNITS[d.type].strength || 0;
+      score = 50 - defStr + (d.maxHp - d.hp); // finish off the wounded
+    }
+    // Melee: skip attacks we'd clearly lose, unless it's the killing blow on a city.
+    if (!ranged && !finishing && defStr > uDef.strength + 6) continue;
+    if (score > bestScore) { bestScore = score; best = t; }
   }
   return best;
+}
+
+// Pull a unit back toward its nearest city and dig in to recover HP.
+function aiRetreatToHeal(state, ai, unit) {
+  let goal = null, bd = Infinity;
+  for (const c of state.cities) {
+    if (c.owner !== ai.id) continue;
+    const d = hexDistance(c.x, c.y, unit.x, unit.y);
+    if (d < bd) { bd = d; goal = { x: c.x, y: c.y }; }
+  }
+  if (!goal) return false; // nowhere safe to go — fight on
+  if (bd > 1) {
+    const reach = reachableTiles(state, unit);
+    let best = null, bestDist = Infinity;
+    for (const key of reach.keys()) {
+      const [x, y] = key.split(',').map(Number);
+      const d = hexDistance(x, y, goal.x, goal.y);
+      if (d < bestDist) { bestDist = d; best = { x, y }; }
+    }
+    if (best && (best.x !== unit.x || best.y !== unit.y)) {
+      applyDirect(state, ai, { type: 'move', unitId: unit.id, x: best.x, y: best.y });
+    }
+  }
+  if (!unit.fortified && unit.movesLeft > 0) applyDirect(state, ai, { type: 'fortify', unitId: unit.id });
+  return true;
 }
 
 function nearestEnemyTarget(state, ai, unit) {
@@ -964,21 +1024,28 @@ function nearestEnemyTarget(state, ai, unit) {
 }
 
 function aiCityProduce(state, ai, city) {
+  const diff = diffOf(state);
   // Count AI military and settlers to decide what to build.
   const myUnits = state.units.filter((u) => u.owner === ai.id);
-  const military = myUnits.filter((u) => UNITS[u.type].role === 'military').length;
+  const mil = myUnits.filter((u) => UNITS[u.type].role === 'military');
+  const military = mil.length;
+  const ranged = mil.filter((u) => UNITS[u.type].range > 1).length;
   const settlers = myUnits.filter((u) => u.type === 'settler').length;
   const builders = myUnits.filter((u) => u.type === 'builder').length;
   const cityCount = state.cities.filter((c) => c.owner === ai.id).length;
+  const armyTarget = Math.round(cityCount * diff.armyPerCity) + 1;
 
   let want;
-  if (settlers === 0 && cityCount < 3 && ai.gold >= UNITS.settler.cost) want = 'settler';
+  if (settlers === 0 && cityCount < diff.maxCities && ai.gold >= UNITS.settler.cost) want = 'settler';
   else if (builders < cityCount && ai.gold >= UNITS.builder.cost) want = 'builder';
-  else if (military < cityCount * 2 + 1) {
-    // Buy the best military unit we can afford.
-    const affordable = ['swordsman', 'horseman', 'spearman', 'archer', 'warrior']
-      .filter((t) => ai.gold >= UNITS[t].cost);
-    want = affordable[0];
+  else if (military < armyTarget) {
+    // Keep roughly one siege/ranged unit per three so the AI can actually crack
+    // cities; otherwise buy the strongest melee it can afford.
+    const wantSiege = ranged < Math.ceil(military / 3);
+    const order = wantSiege
+      ? ['catapult', 'archer', 'swordsman', 'horseman', 'spearman', 'warrior']
+      : ['swordsman', 'horseman', 'spearman', 'catapult', 'archer', 'warrior'];
+    want = order.find((t) => ai.gold >= UNITS[t].cost);
   }
   if (want) applyDirect(state, ai, { type: 'buy_unit', cityId: city.id, unitType: want });
 }

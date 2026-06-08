@@ -4,8 +4,9 @@ import assert from 'node:assert/strict';
 import {
   createGame, applyAction, reachableTiles, reseedIdCounter, tileAt,
   hexNeighbors, hexDistance, cityFrontierTiles, tileBuyCost, stepSpectator,
-  cityPopulation,
+  cityPopulation, recomputeEconomy,
 } from '../server/game/engine.js';
+import { STARTING_GOLD, DIFFICULTY, DEFAULT_DIFFICULTY } from '../server/game/defs.js';
 
 function humanId(state) { return state.players.find((p) => p.isHuman).id; }
 
@@ -319,6 +320,32 @@ test('a city population always equals the number of tiles it owns', () => {
 });
 
 // --- Human-only games --------------------------------------------------------
+test('difficulty gives the AI a starting-gold handicap and scales its income', () => {
+  // Harder games hand the AI extra starting gold; humans stay at the baseline.
+  const easy = createGame({ aiPlayers: 1, seed: 7, difficulty: 'easy' });
+  const deity = createGame({ aiPlayers: 1, seed: 7, difficulty: 'deity' });
+  const easyAi = easy.players.find((p) => p.type === 'ai');
+  const deityAi = deity.players.find((p) => p.type === 'ai');
+  const human = deity.players.find((p) => p.type === 'human');
+  assert.equal(human.gold, STARTING_GOLD, 'human is never handicapped');
+  assert.equal(easyAi.gold, STARTING_GOLD + DIFFICULTY.easy.startBonus);
+  assert.equal(deityAi.gold, STARTING_GOLD + DIFFICULTY.deity.startBonus);
+  assert.ok(deityAi.gold > easyAi.gold, 'harder AI starts richer');
+
+  // The AI's per-turn income is scaled by the difficulty multiplier.
+  recomputeEconomy(deity);
+  // Reproduce the raw (pre-handicap) AI income and compare.
+  const raw = deity.cities
+    .filter((c) => c.owner === deityAi.id)
+    .reduce((sum, c) => sum + c.goldPerTurn, 0);
+  assert.equal(deityAi.goldPerTurn, Math.round(raw * DIFFICULTY.deity.incomeMult));
+});
+
+test('an unknown difficulty falls back to the default level', () => {
+  const s = createGame({ aiPlayers: 1, seed: 7, difficulty: 'impossible-mode' });
+  assert.equal(s.difficulty, DEFAULT_DIFFICULTY);
+});
+
 test('a game can be created with no AI (human-only)', () => {
   const s = createGame({ width: 18, height: 12, aiPlayers: 0, openSlots: 1, seed: 3 });
   assert.equal(s.players.length, 2, 'host plus one open human seat');
