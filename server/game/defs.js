@@ -58,8 +58,10 @@ export const BUILDABLE_UNITS = Object.keys(UNITS);
 export const CITY = {
   baseHp: 100,
   baseStrength: 18,
-  // extra defensive strength per population point
-  strengthPerPop: 2,
+  // Extra defensive strength per population point. Population now equals a
+  // city's tile count (so a fresh city is ~7, not 1); this is tuned lower than
+  // before so larger cities are tougher without becoming uncapturable.
+  strengthPerPop: 1,
   // a garrisoned military unit lends part of its strength to the city
   garrisonStrengthFactor: 0.5,
   // gold a city centre produces on its own, before worked tiles
