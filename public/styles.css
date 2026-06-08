@@ -89,7 +89,20 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .saved-games .sg-actions { display: flex; gap: 6px; }
 .saved-games .sg-actions button { padding: 6px 10px; font-size: 13px; }
 .badge { font-size: 11px; background: var(--panel-2); border: 1px solid var(--border); padding: 2px 8px; border-radius: 20px; color: var(--muted); vertical-align: middle; }
+.sg-tag { font-size: 11px; background: rgba(79,157,222,.16); border: 1px solid var(--accent-2); color: var(--accent-2); padding: 1px 7px; border-radius: 20px; vertical-align: middle; margin-left: 4px; }
+.hint.small { font-size: 12px; margin-top: 8px; }
 footer { color: var(--muted); font-size: 13px; }
+
+/* Lobby */
+.lobby-list { list-style: none; margin: 14px 0; }
+.lobby-list li { display: flex; align-items: center; gap: 10px; padding: 9px 12px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 7px; }
+.lobby-list .lb-dot { width: 14px; height: 14px; border-radius: 50%; flex: 0 0 auto; box-shadow: 0 0 0 2px rgba(0,0,0,.3); }
+.lobby-list .lb-name { flex: 1; font-weight: 600; }
+.lobby-list .lb-you { color: var(--accent); font-weight: 400; }
+.lobby-list .lb-role { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.lobby-list .lb-role.open { color: var(--good); }
+.lobby-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.lobby-actions .hint { margin: 0; }
 
 /* ---- Game ---- */
 #game { display: flex; flex-direction: column; }

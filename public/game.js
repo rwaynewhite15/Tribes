@@ -2,19 +2,31 @@
 'use strict';
 
 const $ = (id) => document.getElementById(id);
+// Per-slot identity: the active game's token rides along on every request so the
+// server knows which player ("seat") this browser controls.
+const authHeaders = () => (G.token ? { 'x-player-token': G.token } : {});
 const api = {
-  async get(url) { const r = await fetch(url); return r.json(); },
+  async get(url) { const r = await fetch(url, { headers: authHeaders() }); return r.json(); },
   async post(url, body) {
-    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify(body || {}) });
     return { ok: r.ok, data: await r.json() };
   },
   async del(url) { const r = await fetch(url, { method: 'DELETE' }); return r.json(); },
 };
 
+// Tokens are stored per game so a player can reload or return and reclaim their seat.
+const tokenKey = (id) => 'tribes.token.' + id;
+const loadToken = (id) => { try { return localStorage.getItem(tokenKey(id)); } catch { return null; } };
+const saveToken = (id, tok) => { try { if (tok) localStorage.setItem(tokenKey(id), tok); } catch {} };
+
+// The player this browser controls (null in a spectator game or as a non-member).
+const me = () => (G.state && G.state._you ? G.state.players.find((p) => p.id === G.state._you) : null);
+
 const G = {
   defs: null,
   state: null,
   gameId: null,
+  token: null,     // identity token for the active game's seat
   selUnit: null,   // selected unit id
   selCity: null,   // selected city id
   selTile: null,   // inspected bare-terrain tile {x,y}
@@ -95,9 +107,13 @@ async function tryResume() {
   let id;
   try { id = localStorage.getItem(LAST_GAME_KEY); } catch { id = null; }
   if (!id) return;
+  G.token = loadToken(id);
   try {
     const res = await api.get('/api/games/' + id);
-    if (res && res.state && res.state.id) { enterGame(res.state); return; }
+    if (res && res.state && res.state.id) {
+      if (res.state.phase === 'lobby') enterLobby(res.state); else enterGame(res.state);
+      return;
+    }
   } catch { /* fall through to menu */ }
   try { localStorage.removeItem(LAST_GAME_KEY); } catch {}
 }
@@ -113,8 +129,11 @@ function bindMenu() {
     const on = e.target.checked;
     $('ng-ai-wrap').classList.toggle('hidden', on);
     $('ng-civs-wrap').classList.toggle('hidden', !on);
+    $('ng-open-wrap').classList.toggle('hidden', on);
     $('ng-start').textContent = on ? 'Watch Game' : 'Begin Conquest';
   });
+  $('lobby-start').addEventListener('click', startLobby);
+  $('lobby-leave').addEventListener('click', showMenu);
 }
 
 async function refreshSavedGames() {
@@ -137,16 +156,30 @@ async function refreshSavedGames() {
   for (const g of games) {
     const li = document.createElement('li');
     const when = g.updatedAt ? new Date(g.updatedAt).toLocaleString() : '';
+    const myTok = loadToken(g.id);
+    const lobby = g.phase === 'lobby';
+    // Decide the primary action: join an open lobby, enter your own lobby,
+    // resume your game, or just watch.
+    let label = 'Load', join = false, tag = '';
+    if (g.gameOver) { label = 'Review'; }
+    else if (lobby) {
+      tag = `<span class="sg-tag">Lobby · ${g.openSlots} open</span>`;
+      if (myTok) label = 'Enter';
+      else if (g.openSlots > 0) { label = 'Join'; join = true; }
+      else label = 'Watch';
+    } else if (g.spectate) { tag = '<span class="sg-tag">Watch</span>'; label = 'Watch'; }
+    else if (myTok) { label = 'Resume'; }
+    else { tag = '<span class="sg-tag">Multiplayer</span>'; label = 'Watch'; }
     li.innerHTML = `
       <div class="sg-info">
-        <span class="sg-name">${escapeHtml(g.name)} ${g.gameOver ? '🏁' : ''}</span>
+        <span class="sg-name">${escapeHtml(g.name)} ${g.gameOver ? '🏁' : ''} ${tag}</span>
         <span class="sg-meta">Turn ${g.turn} · ${when}</span>
       </div>
       <div class="sg-actions">
-        <button class="primary load">Load</button>
+        <button class="primary load">${label}</button>
         <button class="del">✕</button>
       </div>`;
-    li.querySelector('.load').addEventListener('click', () => loadGame(g.id));
+    li.querySelector('.load').addEventListener('click', () => (join ? joinGame(g.id) : loadGame(g.id)));
     li.querySelector('.del').addEventListener('click', async () => {
       await api.del('/api/games/' + g.id);
       try { if (localStorage.getItem(LAST_GAME_KEY) === g.id) localStorage.removeItem(LAST_GAME_KEY); } catch {}
@@ -161,22 +194,128 @@ async function startNewGame() {
   const [w, h] = $('ng-size').value.split('x').map(Number);
   const spectate = $('ng-spectate').checked;
   const aiPlayers = spectate ? Number($('ng-civs').value) : Number($('ng-ai').value);
-  const { ok, data } = await api.post('/api/games', { name, width: w, height: h, aiPlayers, spectate });
+  const openSlots = spectate ? 0 : Number($('ng-open').value);
+  const playerName = ($('ng-player').value || '').trim() || 'Player 1';
+  G.token = null;
+  const { ok, data } = await api.post('/api/games', { name, width: w, height: h, aiPlayers, spectate, openSlots, playerName });
   if (!ok) { toast(data.error || 'Failed to create game'); return; }
-  enterGame(data.state);
+  G.token = data.token || null;
+  saveToken(data.state.id, data.token);
+  if (data.state.phase === 'lobby') enterLobby(data.state); else enterGame(data.state);
 }
 
 async function loadGame(id) {
+  G.token = loadToken(id);
   const { state } = await api.get('/api/games/' + id);
   if (!state) { toast('Could not load game'); return; }
-  enterGame(state);
+  if (state.phase === 'lobby') enterLobby(state); else enterGame(state);
+}
+
+// Claim an open seat in someone else's lobby.
+async function joinGame(id) {
+  G.gameId = id;
+  G.token = loadToken(id); // rejoin our seat if we already hold one
+  let playerName = null;
+  try { playerName = window.prompt('Choose a display name:', 'Player'); } catch {}
+  if (playerName === null) return; // cancelled
+  const { ok, data } = await api.post(`/api/games/${id}/join`, { playerName: playerName.trim() || 'Player' });
+  if (!ok) { toast(data.error || 'Could not join'); return; }
+  G.token = data.token || G.token;
+  saveToken(id, G.token);
+  if (data.state.phase === 'lobby') enterLobby(data.state); else enterGame(data.state);
+}
+
+// Host action: leave the lobby and begin the game for everyone.
+async function startLobby() {
+  const { ok, data } = await api.post(`/api/games/${G.gameId}/start`, {});
+  if (!ok) { toast(data.error || 'Could not start'); if (data.state) { G.state = data.state; renderLobby(); } return; }
+  enterGame(data.state);
 }
 
 function showMenu() {
   stopAutoplay();
+  stopPolling();
   $('game').classList.add('hidden');
+  $('lobby').classList.add('hidden');
   $('menu').classList.remove('hidden');
   refreshSavedGames();
+}
+
+// ---------------------------------------------------------------------------
+// Lobby (multiplayer pre-game)
+// ---------------------------------------------------------------------------
+function enterLobby(state) {
+  stopAutoplay();
+  G.state = state;
+  G.gameId = state.id;
+  G.spectate = false;
+  if (!G.token) G.token = loadToken(state.id);
+  try { localStorage.setItem(LAST_GAME_KEY, state.id); } catch {}
+  $('menu').classList.add('hidden');
+  $('game').classList.add('hidden');
+  $('lobby').classList.remove('hidden');
+  renderLobby();
+  startPolling(); // watch for new joiners and the host pressing Start
+}
+
+function renderLobby() {
+  const s = G.state;
+  $('lobby-name').textContent = s.name;
+  const humans = s.players.filter((p) => p.type === 'human');
+  const joined = humans.filter((p) => p.joined).length;
+  const open = humans.length - joined;
+  const ai = s.players.filter((p) => p.type === 'ai').length;
+  $('lobby-sub').textContent = `${joined} joined · ${open} open seat${open === 1 ? '' : 's'} · ${ai} AI`;
+  const ul = $('lobby-players');
+  ul.innerHTML = '';
+  for (const p of s.players) {
+    const li = document.createElement('li');
+    const youTag = p.id === s._you ? ' <span class="lb-you">(you)</span>' : '';
+    const role = p.type === 'ai' ? 'AI' : (p.host ? 'Host' : (p.joined ? 'Player' : 'Open'));
+    li.innerHTML = `<span class="lb-dot" style="background:${p.color}"></span>`
+      + `<span class="lb-name">${escapeHtml(p.name)}${youTag}</span>`
+      + `<span class="lb-role ${p.joined || p.type === 'ai' ? '' : 'open'}">${role}</span>`;
+    ul.appendChild(li);
+  }
+  const mine = me();
+  const isHost = !!(mine && mine.host);
+  $('lobby-start').classList.toggle('hidden', !isHost);
+  $('lobby-wait').classList.toggle('hidden', isHost);
+}
+
+// ---------------------------------------------------------------------------
+// Polling — keep multiplayer games (and lobbies) in sync without a refresh
+// ---------------------------------------------------------------------------
+let pollTimer = null;
+function startPolling() { stopPolling(); pollTimer = setInterval(pollState, 2200); }
+function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
+
+// Should we ask the server for an update right now? Only when waiting on others:
+// in a lobby, or in a multiplayer game when it isn't our turn.
+function shouldPoll() {
+  if (!G.state || !G.gameId) return false;
+  if (G.state.phase === 'lobby') return true;
+  if (G.spectate || G.state.gameOver) return false;
+  const humans = G.state.players.filter((p) => p.type === 'human').length;
+  if (humans <= 1) return false; // solo vs AI — nothing to wait for
+  return !isHumanTurn();
+}
+
+async function pollState() {
+  if (!shouldPoll()) return;
+  let res;
+  try { res = await api.get('/api/games/' + G.gameId); } catch { return; }
+  if (!res || !res.state) return;
+  const wasLobby = G.state.phase === 'lobby';
+  G.state = res.state;
+  if (wasLobby) {
+    if (G.state.phase === 'lobby') { renderLobby(); return; }
+    enterGame(G.state); // host started the game — drop into the board
+    return;
+  }
+  if (G.selUnit && !G.state.units.find((u) => u.id === G.selUnit)) G.selUnit = null;
+  if (G.selCity && !G.state.cities.find((c) => c.id === G.selCity)) G.selCity = null;
+  updateHud(); renderLog(); renderSelection(); render(); maybeGameOver();
 }
 
 // ---------------------------------------------------------------------------
@@ -188,9 +327,11 @@ function enterGame(state) {
   G.state = state;
   G.gameId = state.id;
   G.spectate = !!state.spectate;
+  if (!G.token) G.token = loadToken(state.id);
   try { localStorage.setItem(LAST_GAME_KEY, state.id); } catch {}
   G.selUnit = null; G.selCity = null;
   $('menu').classList.add('hidden');
+  $('lobby').classList.add('hidden');
   $('game').classList.remove('hidden');
   // Swap End Turn for watch controls in a spectator game.
   $('btn-end').classList.toggle('hidden', G.spectate);
@@ -207,10 +348,11 @@ function enterGame(state) {
   setSheetTab('sel');
   if (isMobileLayout()) toggleSheet(true); // show the intro hint on phones
   maybeGameOver();
+  startPolling(); // multiplayer: keep the board in sync while others move
 }
 
 function centerOnHumanStart() {
-  const human = G.state.players.find((p) => p.isHuman);
+  const human = me();
   let fx = G.state.width / 2, fy = G.state.height / 2;
   // In a spectator game there's no human — just centre on any unit/city.
   const u = human ? G.state.units.find((x) => x.owner === human.id) : G.state.units[0];
@@ -390,16 +532,17 @@ function screenToTile(sx, sy) {
 // Click / hover handling
 // ---------------------------------------------------------------------------
 function isHumanTurn() {
-  const human = G.state.players.find((p) => p.isHuman);
-  if (!human) return false; // spectator game
-  return !G.state.gameOver && G.state.players[G.state.currentPlayer].id === human.id;
+  const mine = me();
+  if (!mine) return false; // spectator game, or a seat we don't control
+  return !G.state.gameOver && G.state.phase !== 'lobby'
+    && G.state.players[G.state.currentPlayer].id === mine.id;
 }
 
 async function onClickBoard(sx, sy) {
   const t = screenToTile(sx, sy);
   if (!t) return;
-  const human = G.state.players.find((p) => p.isHuman);
-  const humanId = human ? human.id : null;
+  const mine = me();
+  const humanId = mine ? mine.id : null;
 
   const unitHere = G.state.units.find((u) => u.x === t.x && u.y === t.y);
   const cityHere = G.state.cities.find((c) => c.x === t.x && c.y === t.y);
@@ -672,7 +815,7 @@ function render() {
     ctx.beginPath();
     ctx.arc(ct.x, ct.y, r, 0, Math.PI * 2);
     ctx.fillStyle = owner.color; ctx.fill();
-    ctx.lineWidth = 2; ctx.strokeStyle = (u.movesLeft > 0 && owner.isHuman) ? '#fff' : 'rgba(0,0,0,.55)'; ctx.stroke();
+    ctx.lineWidth = 2; ctx.strokeStyle = (u.movesLeft > 0 && owner.id === G.state._you) ? '#fff' : 'rgba(0,0,0,.55)'; ctx.stroke();
     drawGlyph(ud.icon, ct.x, ct.y + 7, 21, '#fff', 'center');
     if (ud.role === 'military') hpBar(ct.x - HEX_W * 0.28, ct.y + HEX_S * 0.5, HEX_W * 0.56, u.hp / u.maxHp, '#4caf50');
     if (u.fortified) drawGlyph('⛨', ct.x + HEX_W * 0.26, ct.y - HEX_S * 0.3, 13, '#cfd8e0', 'center');
@@ -718,12 +861,19 @@ function hexA(hex, a) {
 function updateHud() {
   const s = G.state;
   $('hud-turn').textContent = s.turn;
-  const human = s.players.find((p) => p.isHuman);
+  const human = me();
   if (human) {
     $('hud-gold').textContent = Math.floor(human.gold);
     $('hud-gpt').textContent = `(+${human.goldPerTurn}/turn)`;
     $('hud-cities').textContent = s.cities.filter((c) => c.owner === human.id).length;
     $('btn-end').disabled = !isHumanTurn();
+    // In multiplayer, show whose turn it is while we wait.
+    const humans = s.players.filter((p) => p.type === 'human').length;
+    if (!s.gameOver && humans > 1 && !isHumanTurn()) {
+      setStatus(`Waiting for ${s.players[s.currentPlayer].name}…`);
+    } else if ($('hud-status').textContent.startsWith('Waiting for')) {
+      setStatus('');
+    }
   } else {
     // Spectator: show the leading civ by city count instead of "your" gold.
     const lead = leadingCiv(s);
@@ -749,7 +899,7 @@ function setStatus(msg) { $('hud-status').textContent = msg; }
 function renderSelection() {
   const panel = $('selection-panel');
   const s = G.state;
-  const human = s.players.find((p) => p.isHuman);
+  const human = me();
   const humanId = human ? human.id : null;
   updateSheetHint();
 
@@ -842,7 +992,7 @@ function hpBarHtml(hp, max, color = '#4caf50') {
 function buildUnitActions(u) {
   const box = $('unit-actions');
   const s = G.state;
-  const human = s.players.find((p) => p.isHuman);
+  const human = me();
   const tile = s.tiles[u.y * s.width + u.x];
   const ownedByMe = !!tile.ownerCity && s.cities.some((c) => c.id === tile.ownerCity && c.owner === human.id);
   const btns = [];
@@ -891,7 +1041,7 @@ function actBtn(label, fn) {
 
 function buildBuyGrid(city) {
   const grid = $('buy-grid');
-  const human = G.state.players.find((p) => p.isHuman);
+  const human = me();
   for (const [type, ud] of Object.entries(G.defs.UNITS)) {
     const afford = human.gold >= ud.cost;
     const b = document.createElement('button');
@@ -958,7 +1108,8 @@ function updateSheetHint() {
 function maybeGameOver() {
   if (!G.state.gameOver) return;
   stopAutoplay();
-  const human = G.state.players.find((p) => p.isHuman);
+  stopPolling();
+  const human = me();
   const winner = G.state.players.find((p) => p.id === G.state.winner);
   if (!human) {
     // Spectator game — announce the winning civilisation.

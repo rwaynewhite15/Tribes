@@ -235,3 +235,61 @@ test('full domination victory is reachable by destroying all rival cities', () =
   assert.ok(s.gameOver, 'game should be over');
   assert.equal(s.winner, hid, 'human wins');
 });
+
+// --- Multiplayer lobby --------------------------------------------------------
+test('a multiplayer lobby waits to start and blocks actions until it does', async () => {
+  const { createGame: cg, startGame, applyAction: act, normalizeState } = await import('../server/game/engine.js');
+  const s = cg({ width: 16, height: 10, aiPlayers: 1, openSlots: 1, seed: 5 });
+  // Two human seats (host + one open) plus one AI.
+  assert.equal(s.phase, 'lobby');
+  const humans = s.players.filter((p) => p.type === 'human');
+  assert.equal(humans.length, 2);
+  assert.ok(humans[0].host && humans[0].joined, 'host occupies the first seat');
+  assert.ok(!humans[1].joined, 'second seat starts open');
+
+  // Actions are refused while in the lobby.
+  const blocked = act(s, humans[0].id, { type: 'end_turn' });
+  assert.equal(blocked.ok, false);
+
+  // An open seat nobody joined becomes an AI when the host starts.
+  const r = startGame(s);
+  assert.ok(r.ok, r.error);
+  assert.equal(s.phase, 'active');
+  assert.equal(s.players.find((p) => p.id === humans[1].id).type, 'ai', 'unjoined seat converts to AI');
+  // Starting again is a no-op error.
+  assert.equal(startGame(s).ok, false);
+  // normalizeState is a no-op on an already-current state.
+  assert.equal(normalizeState(s).phase, 'active');
+});
+
+test('with two humans, ending a turn passes play to the other human (AI runs between)', async () => {
+  const { createGame: cg, startGame, applyAction: act } = await import('../server/game/engine.js');
+  const s = cg({ width: 18, height: 12, aiPlayers: 1, openSlots: 1, seed: 9 });
+  const humans = s.players.filter((p) => p.type === 'human');
+  s.players.find((p) => p.id === humans[1].id).joined = true; // second human joins
+  startGame(s);
+  assert.equal(s.currentPlayer, 0, 'host goes first');
+  const res = act(s, humans[0].id, { type: 'end_turn' });
+  assert.ok(res.ok, res.error);
+  // Control rests on the second human; the AI seat in between runs automatically.
+  assert.equal(s.players[s.currentPlayer].id, humans[1].id);
+});
+
+test('normalizeState upgrades a pre-lobby save', async () => {
+  const { normalizeState } = await import('../server/game/engine.js');
+  const legacy = {
+    phase: undefined,
+    players: [
+      { id: 'p1', name: 'You', isHuman: true },
+      { id: 'p2', name: 'Rival', isHuman: false },
+    ],
+    cities: [], units: [],
+  };
+  normalizeState(legacy);
+  assert.equal(legacy.phase, 'active');
+  assert.equal(legacy.openSlots, 0);
+  assert.equal(legacy.players[0].type, 'human');
+  assert.equal(legacy.players[0].joined, true);
+  assert.equal(legacy.players[1].type, 'ai');
+  assert.equal(legacy.players[0].token, null);
+});
