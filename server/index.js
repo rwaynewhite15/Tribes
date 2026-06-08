@@ -89,12 +89,19 @@ app.get('/api/games', async (req, res) => {
 app.post('/api/games', async (req, res) => {
   try {
     const { name, width, height, aiPlayers, spectate, openSlots, playerName } = req.body || {};
+    const ai = clamp(aiPlayers, 0, 5, 1);
+    const open = clamp(openSlots, 0, 5, 0);
+    // A non-spectator game needs at least two players. With no AI, that means
+    // at least one open seat for another human (a human-only game).
+    if (!spectate && (1 + open + ai) < 2) {
+      return res.status(400).json({ error: 'A game needs at least one rival or one open seat for another player.' });
+    }
     const state = createGame({
       name: (name || 'New Game').slice(0, 60),
       width: clamp(width, 12, 30, 18),
       height: clamp(height, 8, 20, 12),
-      aiPlayers: clamp(aiPlayers, 1, 5, 1),
-      openSlots: clamp(openSlots, 0, 5, 0),
+      aiPlayers: ai,
+      openSlots: open,
       spectate: !!spectate,
     });
     // The creator becomes the host, holding the first human slot and its token.

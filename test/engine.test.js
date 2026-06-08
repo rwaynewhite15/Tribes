@@ -317,3 +317,12 @@ test('a city population always equals the number of tiles it owns', () => {
   assert.equal(city.population, popBefore + 1, 'each new tile is one more citizen');
   assert.equal(city.population, tiles(), 'population still equals tile count');
 });
+
+// --- Human-only games --------------------------------------------------------
+test('a game can be created with no AI (human-only)', () => {
+  const s = createGame({ width: 18, height: 12, aiPlayers: 0, openSlots: 1, seed: 3 });
+  assert.equal(s.players.length, 2, 'host plus one open human seat');
+  assert.ok(s.players.every((p) => p.type === 'human'), 'no AI civs');
+  assert.equal(s.players.filter((p) => p.type === 'ai').length, 0);
+  assert.equal(s.phase, 'lobby', 'open seats start in a lobby');
+});
