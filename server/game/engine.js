@@ -37,6 +37,9 @@ export function normalizeState(state) {
     if (p.host === undefined) p.host = false;
     if (p.token === undefined) p.token = null;
   }
+  // Population is now derived from territory; refresh it (and gold) so an older
+  // save's stale population counter is corrected the moment it loads.
+  if (state.cities && state.tiles) recomputeEconomy(state);
   return state;
 }
 
@@ -227,20 +230,31 @@ export function tileGold(tile) {
 export function recomputeEconomy(state) {
   for (const p of state.players) p.goldPerTurn = 0;
   // A city earns from every tile it owns (its whole territory), plus a base
-  // yield for the city centre. Territory grows with population and purchases.
+  // yield for the city centre. A city's population *is* its territory: every
+  // owned tile is one citizen, so population always equals the tile count.
   const gold = new Map();
-  for (const c of state.cities) gold.set(c.id, CITY.baseGold);
+  const pop = new Map();
+  for (const c of state.cities) { gold.set(c.id, CITY.baseGold); pop.set(c.id, 0); }
   for (const t of state.tiles) {
     if (!t.ownerCity || !gold.has(t.ownerCity)) continue;
+    pop.set(t.ownerCity, pop.get(t.ownerCity) + 1); // one citizen per owned tile
     const c = state.cities.find((cc) => cc.id === t.ownerCity);
     if (!c || (t.x === c.x && t.y === c.y)) continue; // centre handled by baseGold
     gold.set(t.ownerCity, gold.get(t.ownerCity) + tileGold(t));
   }
   for (const c of state.cities) {
     c.goldPerTurn = gold.get(c.id);
+    c.population = pop.get(c.id); // population == number of tiles the city controls
     const owner = playerById(state, c.owner);
     if (owner) owner.goldPerTurn += c.goldPerTurn;
   }
+}
+
+// A city's population is exactly how many tiles it owns (one citizen per tile).
+export function cityPopulation(state, city) {
+  let n = 0;
+  for (const t of state.tiles) if (t.ownerCity === city.id) n++;
+  return n;
 }
 
 // Unowned, in-bounds tiles adjacent to this city's territory, within maxRadius.
@@ -297,6 +311,19 @@ function expandCityBorder(state, city) {
   if (!best) return false;
   best.ownerCity = city.id;
   return true;
+}
+
+// Give up the city's outermost (farthest from centre) tile, never the centre.
+// Used when a city loses a citizen, e.g. on capture.
+function relinquishOuterTile(state, city) {
+  let far = null, fd = -1;
+  for (const t of state.tiles) {
+    if (t.ownerCity !== city.id) continue;
+    if (t.x === city.x && t.y === city.y) continue; // keep the city centre
+    const d = hexDistance(city.x, city.y, t.x, t.y);
+    if (d > fd) { fd = d; far = t; }
+  }
+  if (far) far.ownerCity = null;
 }
 
 export function tileBuyCost(city) {
@@ -456,7 +483,9 @@ function captureCity(state, city, attacker) {
   // worked tiles transfer with the city automatically.
   city.owner = attacker.owner;
   city.hp = Math.round(city.maxHp / 2);
-  city.population = Math.max(1, city.population - 1);
+  // The sack costs the city a citizen: its outermost tile is lost. (Population
+  // is the tile count, so dropping a tile is what "losing a citizen" means.)
+  relinquishOuterTile(state, city);
   city.captured = true;
   // Move the attacker into the city.
   const occupant = unitAt(state, city.x, city.y);
@@ -617,9 +646,9 @@ function doBuild(state, player, { unitId, improvement }) {
   tile.improvement = improvement;
   unit.movesLeft = 0;
   unit.charges -= 1;
-  // A completed improvement draws a new citizen to the owning city and pushes
-  // its border one tile outward (toward the nearest rival).
-  ownerCity.population += 1;
+  // A completed improvement draws a new citizen to the owning city, claiming
+  // one more tile (toward the nearest rival). Population, being the tile count,
+  // rises by one when the border grows.
   const grew = expandCityBorder(state, ownerCity);
   pushLog(state, `${player.name} built a ${def.name}; ${ownerCity.name} gained a citizen${grew ? ' and expanded its borders' : ''}.`);
   if (unit.charges <= 0) {
@@ -725,12 +754,15 @@ function startTurnFor(state, player) {
     if (c.hp < c.maxHp) c.hp = Math.min(c.maxHp, c.hp + 10);
     c.growth += 1;
     if (c.growth >= CITY.growthEvery) {
-      c.growth = 0;
-      c.population += 1;
-      // Each new citizen pushes the city's border one tile toward the nearest
-      // rival territory.
+      // A new citizen needs land: claim one more tile toward the nearest rival.
+      // If the city is boxed in, hold the growth until room opens up.
       const grew = expandCityBorder(state, c);
-      pushLog(state, `${c.name} grew to population ${c.population}${grew ? ' and expanded its borders.' : '.'}`);
+      if (grew) {
+        c.growth = 0;
+        pushLog(state, `${c.name} grew — a new citizen settled a tile (population ${cityPopulation(state, c)}).`);
+      } else {
+        c.growth = CITY.growthEvery; // ready to grow the moment a tile frees up
+      }
     }
   }
   recomputeEconomy(state); // territory may have changed

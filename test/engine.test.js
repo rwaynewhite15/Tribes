@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   createGame, applyAction, reachableTiles, reseedIdCounter, tileAt,
   hexNeighbors, hexDistance, cityFrontierTiles, tileBuyCost, stepSpectator,
+  cityPopulation,
 } from '../server/game/engine.js';
 
 function humanId(state) { return state.players.find((p) => p.isHuman).id; }
@@ -292,4 +293,27 @@ test('normalizeState upgrades a pre-lobby save', async () => {
   assert.equal(legacy.players[0].joined, true);
   assert.equal(legacy.players[1].type, 'ai');
   assert.equal(legacy.players[0].token, null);
+});
+
+// --- Population equals territory ---------------------------------------------
+test('a city population always equals the number of tiles it owns', () => {
+  const s = createGame({ width: 18, height: 12, aiPlayers: 1, seed: 7 });
+  const hid = humanId(s);
+  const settler = s.units.find((u) => u.owner === hid && u.type === 'settler');
+  applyAction(s, hid, { type: 'found_city', unitId: settler.id });
+  const city = s.cities[0];
+  const tiles = () => s.tiles.filter((t) => t.ownerCity === city.id).length;
+
+  // Founding claims a tile ring, and population reflects that count exactly.
+  assert.equal(city.population, tiles(), 'population matches tiles at founding');
+  assert.equal(city.population, cityPopulation(s, city));
+  assert.ok(city.population > 1, 'a founded city has its worked ring as citizens');
+
+  // Buying a tile adds exactly one citizen.
+  s.players.find((p) => p.id === hid).gold = 500;
+  const popBefore = city.population;
+  const target = cityFrontierTiles(s, city)[0];
+  applyAction(s, hid, { type: 'buy_tile', cityId: city.id, x: target.x, y: target.y });
+  assert.equal(city.population, popBefore + 1, 'each new tile is one more citizen');
+  assert.equal(city.population, tiles(), 'population still equals tile count');
 });

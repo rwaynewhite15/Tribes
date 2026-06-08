@@ -935,8 +935,9 @@ function renderSelection() {
     const owner = s.players.find((p) => p.id === c.owner);
     const mine = c.owner === humanId;
     let html = `<div class="sel-title"><span class="ico">★</span> <span style="color:${owner.color}">${c.name}</span></div>`;
-    html += `<div class="sel-sub">${owner.name} · pop ${c.population} · +${c.goldPerTurn} gold/turn</div>`;
+    html += `<div class="sel-sub">${owner.name} · ${c.population} citizens / tiles · +${c.goldPerTurn} gold/turn</div>`;
     html += `<div class="statline"><span class="stat">Defence <b>${s._cityDef[c.id]}</b></span><span class="stat">Growth <b>${c.growth}/6</b></span></div>`;
+    html += `<p class="hint">Each citizen works one tile — the city grows by claiming new land. Population is simply how many tiles it controls.</p>`;
     html += hpBarHtml(c.hp, c.maxHp, '#e0c050');
     if (mine && isHumanTurn()) {
       const buy = s._cityBuy && s._cityBuy[c.id];
